@@ -28,6 +28,11 @@ class MockLegislacoesController
     DateTime? vigenciaInicio,
     DateTime? vigenciaFim,
     required bool ativo,
+    String? arquivoNome,
+    String? arquivoUrl,
+    String? arquivoBase64,
+    int? arquivoTamanho,
+    String? arquivoExtensao,
   }) async {
     if (shouldThrow) throw Exception('Erro no servidor ao criar');
     criarCalled++;
@@ -42,6 +47,11 @@ class MockLegislacoesController
     DateTime? vigenciaInicio,
     DateTime? vigenciaFim,
     required bool ativo,
+    String? arquivoNome,
+    String? arquivoUrl,
+    String? arquivoBase64,
+    int? arquivoTamanho,
+    String? arquivoExtensao,
   }) async {
     if (shouldThrow) throw Exception('Erro no servidor ao editar');
     editarCalled++;

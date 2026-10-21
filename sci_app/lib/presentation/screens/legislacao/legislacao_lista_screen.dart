@@ -189,6 +189,31 @@ class _LegislacaoCard extends StatelessWidget {
                     const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 8),
+              if (doc.temAnexo) ...[
+                Row(
+                  children: [
+                    Icon(
+                      doc.isPdf ? Icons.picture_as_pdf : Icons.description,
+                      size: 15,
+                      color: doc.isPdf ? Colors.red.shade700 : Colors.blue.shade700,
+                    ),
+                    const SizedBox(width: 4),
+                    Expanded(
+                      child: Text(
+                        doc.arquivoNome ?? (doc.isPdf ? 'Documento PDF' : 'Documento Word'),
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: doc.isPdf ? Colors.red.shade800 : Colors.blue.shade800,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+              ],
               Row(
                 children: [
                   const Icon(Icons.calendar_today_outlined,

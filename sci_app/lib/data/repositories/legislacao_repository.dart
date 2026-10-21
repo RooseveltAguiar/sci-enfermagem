@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../models/legislacao_model.dart';
 
@@ -36,10 +37,31 @@ class LegislacaoRepository {
     DateTime? vigenciaInicio,
     DateTime? vigenciaFim,
     required bool ativo,
+    String? arquivoNome,
+    String? arquivoUrl,
+    String? arquivoBase64,
+    int? arquivoTamanho,
+    String? arquivoExtensao,
   }) async {
+    String corpoFinal = conteudo;
+    if (arquivoNome != null &&
+        arquivoNome.isNotEmpty &&
+        ((arquivoUrl != null && arquivoUrl.isNotEmpty) ||
+            (arquivoBase64 != null && arquivoBase64.isNotEmpty))) {
+      corpoFinal = jsonEncode({
+        '__is_documento__': true,
+        'texto': conteudo,
+        'arquivo_nome': arquivoNome,
+        'arquivo_url': arquivoUrl,
+        'arquivo_base64': arquivoBase64,
+        'arquivo_tamanho': arquivoTamanho,
+        'arquivo_extensao': arquivoExtensao,
+      });
+    }
+
     final payload = {
       'titulo': titulo,
-      'conteudo': conteudo,
+      'corpo': corpoFinal,
       'tipo': tipo,
       'vigencia_inicio': vigenciaInicio?.toIso8601String(),
       'vigencia_fim': vigenciaFim?.toIso8601String(),
@@ -58,10 +80,31 @@ class LegislacaoRepository {
     DateTime? vigenciaInicio,
     DateTime? vigenciaFim,
     required bool ativo,
+    String? arquivoNome,
+    String? arquivoUrl,
+    String? arquivoBase64,
+    int? arquivoTamanho,
+    String? arquivoExtensao,
   }) async {
+    String corpoFinal = conteudo;
+    if (arquivoNome != null &&
+        arquivoNome.isNotEmpty &&
+        ((arquivoUrl != null && arquivoUrl.isNotEmpty) ||
+            (arquivoBase64 != null && arquivoBase64.isNotEmpty))) {
+      corpoFinal = jsonEncode({
+        '__is_documento__': true,
+        'texto': conteudo,
+        'arquivo_nome': arquivoNome,
+        'arquivo_url': arquivoUrl,
+        'arquivo_base64': arquivoBase64,
+        'arquivo_tamanho': arquivoTamanho,
+        'arquivo_extensao': arquivoExtensao,
+      });
+    }
+
     final payload = {
       'titulo': titulo,
-      'conteudo': conteudo,
+      'corpo': corpoFinal,
       'tipo': tipo,
       'vigencia_inicio': vigenciaInicio?.toIso8601String(),
       'vigencia_fim': vigenciaFim?.toIso8601String(),

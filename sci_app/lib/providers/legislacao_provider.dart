@@ -41,6 +41,11 @@ class LegislacoesController
     DateTime? vigenciaInicio,
     DateTime? vigenciaFim,
     required bool ativo,
+    String? arquivoNome,
+    String? arquivoUrl,
+    String? arquivoBase64,
+    int? arquivoTamanho,
+    String? arquivoExtensao,
   }) async {
     await _repository.criarLegislacao(
       titulo: titulo,
@@ -49,6 +54,11 @@ class LegislacoesController
       vigenciaInicio: vigenciaInicio,
       vigenciaFim: vigenciaFim,
       ativo: ativo,
+      arquivoNome: arquivoNome,
+      arquivoUrl: arquivoUrl,
+      arquivoBase64: arquivoBase64,
+      arquivoTamanho: arquivoTamanho,
+      arquivoExtensao: arquivoExtensao,
     );
     await carregarLegislacoes();
   }
@@ -61,6 +71,11 @@ class LegislacoesController
     DateTime? vigenciaInicio,
     DateTime? vigenciaFim,
     required bool ativo,
+    String? arquivoNome,
+    String? arquivoUrl,
+    String? arquivoBase64,
+    int? arquivoTamanho,
+    String? arquivoExtensao,
   }) async {
     await _repository.editarLegislacao(
       id: id,
@@ -70,6 +85,11 @@ class LegislacoesController
       vigenciaInicio: vigenciaInicio,
       vigenciaFim: vigenciaFim,
       ativo: ativo,
+      arquivoNome: arquivoNome,
+      arquivoUrl: arquivoUrl,
+      arquivoBase64: arquivoBase64,
+      arquivoTamanho: arquivoTamanho,
+      arquivoExtensao: arquivoExtensao,
     );
     await carregarLegislacoes();
   }

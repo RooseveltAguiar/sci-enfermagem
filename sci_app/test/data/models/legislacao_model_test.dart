@@ -181,5 +181,76 @@ void main() {
       expect(semMudanca.deletedAt, base.deletedAt);
       expect(semMudanca.createdAt, base.createdAt);
     });
+
+    test('6. Suporte completo a anexo de arquivo (PDF, DOC e Base64)', () {
+      final docPdf = const LegislacaoModel(
+        id: 'leg-pdf',
+        titulo: 'Portaria com PDF',
+        conteudo: 'Texto breve',
+        tipo: 'Portaria',
+        ativo: true,
+        arquivoNome: 'resolucao_cofen.pdf',
+        arquivoBase64: 'JVBERi0xLjQK...',
+        arquivoTamanho: 204800,
+        arquivoExtensao: 'pdf',
+      );
+
+      expect(docPdf.temAnexo, isTrue);
+      expect(docPdf.isPdf, isTrue);
+      expect(docPdf.isDoc, isFalse);
+
+      final docDocx = const LegislacaoModel(
+        id: 'leg-doc',
+        titulo: 'Regimento com Word',
+        conteudo: '',
+        tipo: 'Regimento',
+        ativo: true,
+        arquivoNome: 'regimento_interno.docx',
+        arquivoUrl: 'https://exemplo.com/doc.docx',
+        arquivoTamanho: 102400,
+        arquivoExtensao: 'docx',
+      );
+
+      expect(docDocx.temAnexo, isTrue);
+      expect(docDocx.isPdf, isFalse);
+      expect(docDocx.isDoc, isTrue);
+
+      final docSemAnexo = const LegislacaoModel(
+        id: 'leg-sem',
+        titulo: 'Sem anexo',
+        conteudo: 'Apenas texto',
+        tipo: 'Geral',
+        ativo: true,
+      );
+
+      expect(docSemAnexo.temAnexo, isFalse);
+    });
+
+    test('7. fromJson decodifica payload estruturado __is_documento__ e toJson serializa corretamente', () {
+      final jsonComCorpoEstruturado = {
+        'id': 'leg-anexo',
+        'titulo': 'Diretriz Acadêmica',
+        'corpo': '{"__is_documento__":true,"texto":"Texto explicativo","arquivo_nome":"diretriz.pdf","arquivo_url":"https://storage/diretriz.pdf","arquivo_base64":"abc123base64","arquivo_tamanho":512000,"arquivo_extensao":"pdf"}',
+        'tipo': 'Diretriz',
+        'ativo': true,
+      };
+
+      final model = LegislacaoModel.fromJson(jsonComCorpoEstruturado);
+      expect(model.id, 'leg-anexo');
+      expect(model.titulo, 'Diretriz Acadêmica');
+      expect(model.conteudo, 'Texto explicativo');
+      expect(model.arquivoNome, 'diretriz.pdf');
+      expect(model.arquivoUrl, 'https://storage/diretriz.pdf');
+      expect(model.arquivoBase64, 'abc123base64');
+      expect(model.arquivoTamanho, 512000);
+      expect(model.arquivoExtensao, 'pdf');
+      expect(model.temAnexo, isTrue);
+      expect(model.isPdf, isTrue);
+
+      final jsonSaida = model.toJson();
+      expect(jsonSaida['arquivo_nome'], 'diretriz.pdf');
+      expect(jsonSaida['arquivo_url'], 'https://storage/diretriz.pdf');
+      expect(jsonSaida['arquivo_tamanho'], 512000);
+    });
   });
 }
