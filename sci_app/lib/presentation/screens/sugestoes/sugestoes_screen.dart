@@ -44,7 +44,6 @@ class _SugestoesScreenState extends ConsumerState<SugestoesScreen> {
       message: 'Enviar esta sugestão para a coordenação?',
       confirmText: 'Enviar',
       onConfirm: () async {
-        Navigator.of(context).pop();
         setState(() => _saving = true);
         try {
           await ref

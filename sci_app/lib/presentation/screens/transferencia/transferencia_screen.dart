@@ -132,7 +132,6 @@ class _TransferenciaScreenState extends ConsumerState<TransferenciaScreen> {
           '${aluno.nome}\nDe: ${aluno.campoAtual} — ${aluno.turnoAtual}\nPara: ${campo.nome} — ${turno.tipo}\n\nO histórico de frequência e atividades do campo anterior será preservado mas não transferido.',
       confirmText: 'Transferir',
       onConfirm: () async {
-        Navigator.of(context).pop();
         setState(() => _executando = true);
         try {
           await ref

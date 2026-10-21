@@ -65,7 +65,6 @@ class ConfiguracoesScreen extends ConsumerWidget {
                           message: 'Esta alteração afeta o cálculo de risco de todos os alunos imediatamente. Deseja confirmar?',
                           confirmText: 'Salvar Configuração',
                           onConfirm: () {
-                            Navigator.pop(context);
                             ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Limiar atualizado com sucesso!')));
                           },
                         );

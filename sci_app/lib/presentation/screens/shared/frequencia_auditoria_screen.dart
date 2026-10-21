@@ -340,7 +340,6 @@ class FrequenciaAuditoriaScreen extends ConsumerWidget {
       message: 'Confirma a validação desta frequência?',
       confirmText: 'Validar',
       onConfirm: () async {
-        Navigator.pop(context);
         try {
           await ref.read(pendentesValidacaoProvider.notifier).validarFrequencia(frequenciaId);
           ref.invalidate(auditoriaFrequenciaProvider(frequenciaId));
@@ -418,7 +417,6 @@ class FrequenciaAuditoriaScreen extends ConsumerWidget {
       message: 'Confirma a ratificação deste abono?',
       confirmText: 'Ratificar',
       onConfirm: () async {
-        Navigator.pop(context);
         try {
           await ref.read(pendentesRatificacaoProvider.notifier).ratificarAbono(frequenciaId);
           ref.invalidate(auditoriaFrequenciaProvider(frequenciaId));

@@ -88,7 +88,6 @@ class _TermosFormScreenState extends ConsumerState<TermosFormScreen> {
             'Ativar versão ${_versaoController.text}? A versão atualmente ativa será desativada automaticamente e todos os alunos deverão aceitar os novos termos.',
         confirmText: 'Ativar e Salvar',
         onConfirm: () async {
-          Navigator.of(context).pop();
           await _executarSalvar();
         },
       );

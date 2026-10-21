@@ -111,7 +111,6 @@ class _RegistrarVisitaScreenState extends ConsumerState<RegistrarVisitaScreen> {
       message: 'Confirma o envio do relato e a validação do local da visita?',
       confirmText: 'Confirmar Registro',
       onConfirm: () async {
-        context.pop(); // Fecha bottom sheet
         setState(() => _isSubmitting = true);
 
         try {

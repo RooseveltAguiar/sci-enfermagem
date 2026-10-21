@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import '../../../providers/auth_provider.dart';
 import '../../../providers/campos_provider.dart';
 import '../../widgets/confirmation_bottom_sheet.dart';
@@ -261,7 +262,6 @@ class _CampoFormScreenState extends ConsumerState<CampoFormScreen> {
       confirmText: 'Salvar',
       onConfirm: () async {
         final messenger = ScaffoldMessenger.of(context);
-        final navigator = Navigator.of(context);
 
         try {
           final supabase = ref.read(supabaseClientProvider);
@@ -356,8 +356,11 @@ class _CampoFormScreenState extends ConsumerState<CampoFormScreen> {
             messenger.showSnackBar(
               const SnackBar(content: Text('Campo de estágio salvo com sucesso!'), backgroundColor: Color(0xFF1B6B45)),
             );
-            navigator.pop(); // Fecha bottom sheet
-            navigator.pop(); // Volta a tela
+            if (context.canPop()) {
+              context.pop();
+            } else {
+              context.go('/coordenacao/campos');
+            }
           }
         } catch (e) {
           // EXIBE O ERRO REAL EM VERMELHO E NAO RETORNA SUCESSO FALSO
@@ -379,7 +382,6 @@ class _CampoFormScreenState extends ConsumerState<CampoFormScreen> {
       confirmText: 'Desativar',
       onConfirm: () async {
         final messenger = ScaffoldMessenger.of(context);
-        final navigator = Navigator.of(context);
 
         try {
           if (widget.campoId != null) {
@@ -394,8 +396,11 @@ class _CampoFormScreenState extends ConsumerState<CampoFormScreen> {
           }
           if (mounted) {
             messenger.showSnackBar(const SnackBar(content: Text('Campo desativado com sucesso.')));
-            navigator.pop();
-            navigator.pop();
+            if (context.canPop()) {
+              context.pop();
+            } else {
+              context.go('/coordenacao/campos');
+            }
           }
         } catch (e) {
           if (mounted) {

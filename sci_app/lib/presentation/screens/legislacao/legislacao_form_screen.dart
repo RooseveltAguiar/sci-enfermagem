@@ -149,7 +149,6 @@ class _LegislacaoFormScreenState extends ConsumerState<LegislacaoFormScreen> {
       confirmText: 'Desativar',
       isDestructive: true,
       onConfirm: () async {
-        Navigator.of(context).pop();
         setState(() => _saving = true);
         try {
           await ref

@@ -331,7 +331,6 @@ class _RegistrarPresencaScreenState extends ConsumerState<RegistrarPresencaScree
       message: 'Local: ${_selectedCampo?.nome}\nTurno: $_selectedTurno\nHorário: ${TimeOfDay.now().format(context)}',
       confirmText: 'CONFIRMAR',
       onConfirm: () {
-        Navigator.pop(context);
         _executarRegistroBanco();
       },
     );
@@ -349,7 +348,6 @@ class _RegistrarPresencaScreenState extends ConsumerState<RegistrarPresencaScree
       message: 'Confirmar saída às $horaSaidaStr?\nHoras trabalhadas hoje: ${hCalc}h',
       confirmText: 'CONFIRMAR SAÍDA',
       onConfirm: () async {
-        Navigator.pop(context);
         try {
           await ref.read(historicoAlunoProvider.notifier).registrarCheckout(
             frequenciaId: frequenciaId,

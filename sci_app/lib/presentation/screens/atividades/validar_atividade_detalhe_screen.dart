@@ -71,7 +71,6 @@ class ValidarAtividadeDetalheScreen extends ConsumerWidget {
                             message: 'Confirma a validação de todas as ${atividades.length} atividades?',
                             confirmText: 'Validar',
                             onConfirm: () {
-                              Navigator.pop(context); // close modal
                               ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Atividades validadas!')));
                               context.pop(); // go back
                             },

@@ -134,7 +134,6 @@ class _VisitasValidarScreenState extends ConsumerState<VisitasValidarScreen> {
       message: 'Confirma a aprovação desta visita técnica?',
       confirmText: 'Validar',
       onConfirm: () async {
-        context.pop();
         try {
           await ref.read(visitasServiceProvider).validarVisita(id);
           if (mounted) {

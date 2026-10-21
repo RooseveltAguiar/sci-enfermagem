@@ -104,7 +104,6 @@ class _UsuariosFormScreenState extends ConsumerState<UsuariosFormScreen> {
         message:
             'Criar usuário ${_nomeController.text.trim()} como ${_labelPerfil(_perfilSelecionado)}? Uma senha temporária será gerada automaticamente.',
         onConfirm: () async {
-          Navigator.of(context).pop();
           await _executarCriacao();
         },
       );
@@ -200,7 +199,6 @@ class _UsuariosFormScreenState extends ConsumerState<UsuariosFormScreen> {
       message: msg,
       isDestructive: desativar,
       onConfirm: () async {
-        Navigator.of(context).pop();
         setState(() => _isLoading = true);
         try {
           final ctrl = ref.read(usuariosControllerProvider);
