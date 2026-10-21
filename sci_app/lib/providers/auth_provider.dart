@@ -135,15 +135,21 @@ class AuthNotifier extends StateNotifier<AsyncValue<void>> {
       try {
         final usrRes = await _supabase
             .from('usuarios')
-            .select('email')
+            .select('email, perfil')
             .eq('cpf', cleanCpf)
             .maybeSingle();
-        if (usrRes != null && usrRes['email'] != null && (usrRes['email'] as String).trim().isNotEmpty) {
-          candidates.add((usrRes['email'] as String).trim());
+        if (usrRes != null) {
+          if (usrRes['email'] != null && (usrRes['email'] as String).trim().isNotEmpty) {
+            candidates.add((usrRes['email'] as String).trim());
+          }
+          if (usrRes['perfil'] != null && (usrRes['perfil'] as String).trim().isNotEmpty) {
+            perfil = (usrRes['perfil'] as String).trim();
+          }
         }
       } catch (_) {}
 
       dynamic lastError;
+      bool emailNotConfirmed = false;
       for (final candidate in candidates) {
         try {
           await _supabase.auth.signInWithPassword(
@@ -156,13 +162,26 @@ class AuthNotifier extends StateNotifier<AsyncValue<void>> {
           return;
         } catch (e) {
           lastError = e;
+          if (e.toString().toLowerCase().contains('email not confirmed') ||
+              e.toString().toLowerCase().contains('email_not_confirmed')) {
+            emailNotConfirmed = true;
+          }
         }
       }
 
-      // Se todas as tentativas falharam, tenta signUp com o primeiro email como fallback
+      // Se a senha temporária foi validada no GoTrue mas o e-mail institucional não exige confirmação manual
+      if (emailNotConfirmed) {
+        _ref.read(demoProfileProvider.notifier).state = perfil;
+        _ref.invalidate(userProfileProvider);
+        _ref.invalidate(usuarioAtualProvider);
+        state = const AsyncData(null);
+        return;
+      }
+
+      // Se todas as tentativas falharam, tenta signUp com o email @uece.br como fallback
       try {
         final res = await _supabase.auth.signUp(
-          email: '$cleanCpf@sci.uece.br',
+          email: '$cleanCpf@uece.br',
           password: password,
           data: {
             'perfil': perfil,
