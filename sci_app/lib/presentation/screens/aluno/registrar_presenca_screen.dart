@@ -201,10 +201,9 @@ class _RegistrarPresencaScreenState extends ConsumerState<RegistrarPresencaScree
                     style: TextStyle(color: Colors.green, fontWeight: FontWeight.bold, fontSize: 16),
                   ),
                   const SizedBox(height: 4),
-                  Text('Distância do estágio: ${_formatarDistancia(_distanciaMetros)}'),
-                  Text(
-                    'Dentro do raio permitido de ${campo?.raioMetros.toInt() ?? 150}m. Saída liberada!',
-                    style: const TextStyle(color: Colors.black54, fontSize: 13),
+                  const Text(
+                    'Você está no local do estágio. Saída liberada!',
+                    style: TextStyle(color: Colors.black54, fontSize: 13),
                   ),
                   const SizedBox(height: 8),
                   TextButton.icon(
@@ -228,24 +227,20 @@ class _RegistrarPresencaScreenState extends ConsumerState<RegistrarPresencaScree
                   const Icon(Icons.wrong_location_rounded, color: Colors.red, size: 56),
                   const SizedBox(height: 8),
                   const Text(
-                    'Saída NÃO liberada: Fora do raio do estágio',
+                    'Saída NÃO liberada: Fora do local de estágio',
                     textAlign: TextAlign.center,
                     style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold, fontSize: 16),
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    'Sua distância atual: ${_formatarDistancia(_distanciaMetros)}',
+                    'Sua distância aproximada: ${_formatarDistancia(_distanciaMetros)}',
                     style: const TextStyle(fontWeight: FontWeight.bold),
                   ),
-                  Text(
-                    'Raio permitido: ${campo?.raioMetros.toInt() ?? 150} metros.',
-                    style: const TextStyle(color: Colors.black87),
-                  ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 6),
                   const Text(
                     'Você precisa estar no local de estágio para registrar a saída.',
                     textAlign: TextAlign.center,
-                    style: TextStyle(color: Colors.red, fontSize: 13),
+                    style: TextStyle(color: Colors.black87),
                   ),
                   const SizedBox(height: 12),
                   FilledButton.tonalIcon(
@@ -298,7 +293,7 @@ class _RegistrarPresencaScreenState extends ConsumerState<RegistrarPresencaScree
           } else {
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(
-                content: Text('Presença bloqueada: Você deve estar dentro do raio do campo de estágio.'),
+                content: Text('Presença bloqueada: Você deve estar no local do campo de estágio.'),
                 backgroundColor: Colors.red,
               ),
             );
@@ -392,7 +387,6 @@ class _RegistrarPresencaScreenState extends ConsumerState<RegistrarPresencaScree
                       Text(_selectedCampo!.nome, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
                       const SizedBox(height: 4),
                       Text('Turno: $_selectedTurno'),
-                      Text('Raio permitido para check-in: ${_selectedCampo!.raioMetros.toInt()} metros'),
                     ],
                   ),
                 ),
@@ -454,13 +448,9 @@ class _RegistrarPresencaScreenState extends ConsumerState<RegistrarPresencaScree
                         style: TextStyle(color: Colors.green, fontWeight: FontWeight.bold, fontSize: 16),
                       ),
                       const SizedBox(height: 6),
-                      Text(
-                        'Você está a ${_formatarDistancia(_distanciaMetros)} do centro do estágio.',
-                        style: const TextStyle(fontWeight: FontWeight.w600),
-                      ),
-                      Text(
-                        'Dentro do raio permitido de ${_selectedCampo?.raioMetros.toInt() ?? 150}m. Presença liberada!',
-                        style: const TextStyle(color: Colors.black54, fontSize: 13),
+                      const Text(
+                        'Você está no local do estágio. Presença liberada!',
+                        style: TextStyle(fontWeight: FontWeight.w600),
                       ),
                       if (_lat != null && _lng != null) ...[
                         const SizedBox(height: 6),
@@ -491,26 +481,20 @@ class _RegistrarPresencaScreenState extends ConsumerState<RegistrarPresencaScree
                       const Icon(Icons.wrong_location_rounded, color: Colors.red, size: 56),
                       const SizedBox(height: 12),
                       const Text(
-                        'Presença NÃO liberada: Fora do raio do estágio',
+                        'Presença NÃO liberada: Fora do local de estágio',
                         textAlign: TextAlign.center,
                         style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold, fontSize: 16),
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        'Sua distância atual: ${_formatarDistancia(_distanciaMetros)}',
+                        'Sua distância aproximada: ${_formatarDistancia(_distanciaMetros)}',
                         style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
                       ),
-                      const SizedBox(height: 4),
-                      Text(
-                        'O raio máximo permitido para este campo é de ${_selectedCampo?.raioMetros.toInt() ?? 150} metros.',
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(color: Colors.black87),
-                      ),
-                      const SizedBox(height: 8),
+                      const SizedBox(height: 6),
                       const Text(
                         'Para registrar presença, você deve estar fisicamente presente no campo de estágio.',
                         textAlign: TextAlign.center,
-                        style: TextStyle(color: Colors.red, fontSize: 13, fontStyle: FontStyle.italic),
+                        style: TextStyle(color: Colors.black87),
                       ),
                       if (_lat != null && _lng != null) ...[
                         const SizedBox(height: 6),
@@ -638,8 +622,7 @@ class _RegistrarPresencaScreenState extends ConsumerState<RegistrarPresencaScree
             ],
           ),
           content: Text(
-            'Você está fora do raio permitido do campo de estágio (${_formatarDistancia(_distanciaMetros)} de distância).\n\n'
-            'Raio máximo permitido: ${_selectedCampo?.raioMetros.toInt() ?? 150} metros.\n\n'
+            'Você está fora do perímetro do campo de estágio (${_formatarDistancia(_distanciaMetros)} de distância).\n\n'
             'Para liberar a presença, você deve estar fisicamente presente no local do estágio.',
           ),
           actions: [
@@ -678,7 +661,7 @@ class _RegistrarPresencaScreenState extends ConsumerState<RegistrarPresencaScree
             ],
           ),
           content: Text(
-            'Você está fora do raio permitido do campo de estágio (${_formatarDistancia(_distanciaMetros)} de distância).\n\n'
+            'Você está fora do perímetro do campo de estágio (${_formatarDistancia(_distanciaMetros)} de distância).\n\n'
             'Para registrar a saída, você deve estar fisicamente no local do estágio.',
           ),
           actions: [
@@ -732,7 +715,7 @@ class _RegistrarPresencaScreenState extends ConsumerState<RegistrarPresencaScree
             String msgAmigavel = 'Erro ao registrar saída: $errStr';
 
             if (errStr.contains('saida_fora_do_campo') || errStr.contains('fora_do_campo')) {
-              msgAmigavel = 'Você está fora do perímetro do raio do campo de estágio para registrar a saída.';
+              msgAmigavel = 'Você está fora do perímetro do campo de estágio para registrar a saída.';
             } else if (errStr.contains('chk_saida_apos_entrada')) {
               msgAmigavel = 'Horário de saída inválido: O horário de saída deve ser posterior ao horário de entrada registrado.';
             }
@@ -788,7 +771,7 @@ class _RegistrarPresencaScreenState extends ConsumerState<RegistrarPresencaScree
 
       if (!_dentroDoRaio || _lat == null || _lng == null) {
         throw Exception(
-          'Presença não liberada: Você está fora do raio permitido do campo de estágio (${_formatarDistancia(_distanciaMetros)} de distância). Raio permitido: ${campo.raioMetros.toInt()}m.',
+          'Presença não liberada: Você está fora do local de estágio (${_formatarDistancia(_distanciaMetros)} de distância).',
         );
       }
 
@@ -996,15 +979,14 @@ class _RegistrarPresencaScreenState extends ConsumerState<RegistrarPresencaScree
       if (!mounted) return;
       final msg = e.toString();
       if (msg.contains('fora_do_campo') || msg.contains('raio')) {
-        final raioMetros = _selectedCampo?.raioMetros ?? 100;
         await showDialog(
           context: context,
           barrierDismissible: false,
           builder: (ctx) => AlertDialog(
             title: const Text('Fora do campo de estágio'),
-            content: Text(
-              'Você está fora do ponto central do campo. '
-              'O raio permitido é de ${raioMetros.toInt()} metros.',
+            content: const Text(
+              'Você está fora do local de estágio. '
+              'Para registrar a presença, aproxime-se do local definido.',
             ),
             actions: [
               TextButton(
