@@ -367,6 +367,14 @@ class CampoEstagio {
       lng: rawLng != null ? (rawLng as num).toDouble() : 0.0,
     );
   }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is CampoEstagio && runtimeType == other.runtimeType && id == other.id;
+
+  @override
+  int get hashCode => id.hashCode;
 }
 
 class CamposNotifier extends StateNotifier<AsyncValue<List<CampoEstagio>>> {
@@ -397,24 +405,48 @@ class CamposNotifier extends StateNotifier<AsyncValue<List<CampoEstagio>>> {
       final supabase = ref.read(supabaseClientProvider);
       final userId = supabase.auth.currentUser?.id;
 
-      if (userId == null || userId.trim().isEmpty) {
-        state = const AsyncValue.data([]);
-        return;
+      final Map<String, CampoEstagio> camposPorId = {};
+
+      if (userId != null && userId.trim().isNotEmpty) {
+        try {
+          // Busca alocacoes_alunos do aluno (a tabela alocacoes_alunos usa deleted_at e data_fim, sem coluna 'ativo')
+          final response = await supabase
+              .from('alocacoes_alunos')
+              .select('*, campos_estagio(*)')
+              .eq('aluno_id', userId)
+              .isFilter('deleted_at', null);
+
+          for (final n in (response as List)) {
+            final map = Map<String, dynamic>.from(n as Map);
+            final ce = map['campos_estagio'];
+            if (ce is Map) {
+              final campo = CampoEstagio.fromJson(Map<String, dynamic>.from(ce));
+              if (campo.id.isNotEmpty && campo.ativo) {
+                camposPorId[campo.id] = campo;
+              }
+            }
+          }
+        } catch (_) {}
       }
 
-      // Busca alocacoes_alunos ativas do aluno
-      final response = await supabase
-          .from('alocacoes_alunos')
-          .select('*, campos_estagio(*)')
-          .eq('aluno_id', userId)
-          .eq('ativo', true)
-          .isFilter('deleted_at', null);
+      // Inclui também todos os campos de estágio ativos para permitir check-in em novos campos cadastrados
+      try {
+        final todosAtivos = await supabase
+            .from('campos_estagio')
+            .select('*')
+            .eq('ativo', true)
+            .isFilter('deleted_at', null)
+            .order('nome', ascending: true);
 
-      final campos = (response as List)
-          .map((n) => CampoEstagio.fromJson(n['campos_estagio']))
-          .toList();
+        for (final item in (todosAtivos as List)) {
+          final campo = CampoEstagio.fromJson(Map<String, dynamic>.from(item as Map));
+          if (campo.id.isNotEmpty && campo.ativo) {
+            camposPorId.putIfAbsent(campo.id, () => campo);
+          }
+        }
+      } catch (_) {}
 
-      state = AsyncValue.data(campos);
+      state = AsyncValue.data(camposPorId.values.toList());
     } catch (e, stack) {
       state = AsyncValue.error(e, stack);
     }
