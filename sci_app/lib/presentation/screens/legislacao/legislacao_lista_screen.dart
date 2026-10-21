@@ -23,7 +23,7 @@ class LegislacaoListaScreen extends ConsumerWidget {
       ),
       floatingActionButton: podeEditar
           ? FloatingActionButton.extended(
-              onPressed: () => context.push('/legislacao/nova'),
+              onPressed: () => context.push('/legislacao/novo'),
               icon: const Icon(Icons.add),
               label: const Text('Nova Legislação'),
             )

@@ -54,6 +54,7 @@ import '../data/models/usuario_model.dart';
 
 // -- Sprint 5 (Legislação, Termos, Sugestões, Transferência, Conflitos)
 import '../data/models/legislacao_model.dart';
+import '../providers/legislacao_provider.dart';
 import '../data/models/termo_model.dart';
 import '../providers/termos_provider.dart';
 import '../presentation/screens/legislacao/legislacao_lista_screen.dart';
@@ -701,8 +702,22 @@ final goRouterProvider = Provider<GoRouter>((ref) {
         builder: (context, state) => const LegislacaoFormScreen(),
       ),
       GoRoute(
+        path: '/legislacao/nova',
+        builder: (context, state) => const LegislacaoFormScreen(),
+      ),
+      GoRoute(
         path: '/legislacao/:id',
-        builder: (context, state) => LegislacaoDetalheScreen(doc: state.extra as LegislacaoModel),
+        builder: (context, state) {
+          final id = state.pathParameters['id'] ?? '';
+          if (id == 'novo' || id == 'nova') {
+            return const LegislacaoFormScreen();
+          }
+          final doc = state.extra as LegislacaoModel?;
+          if (doc != null) {
+            return LegislacaoDetalheScreen(doc: doc);
+          }
+          return _LegislacaoDetalheLoader(id: id);
+        },
       ),
       GoRoute(
         path: '/legislacao/:id/editar',
@@ -751,3 +766,49 @@ final goRouterProvider = Provider<GoRouter>((ref) {
     ],
   );
 });
+
+class _LegislacaoDetalheLoader extends ConsumerWidget {
+  final String id;
+  const _LegislacaoDetalheLoader({required this.id});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final docsAsync = ref.watch(legislacoesProvider);
+    return docsAsync.when(
+      data: (docs) {
+        try {
+          final doc = docs.firstWhere((d) => d.id == id);
+          return LegislacaoDetalheScreen(doc: doc);
+        } catch (_) {
+          return Scaffold(
+            appBar: AppBar(title: const Text('Legislação e Normas')),
+            body: Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(Icons.description_outlined, size: 64, color: Colors.grey),
+                  const SizedBox(height: 16),
+                  const Text('Documento não encontrado.'),
+                  const SizedBox(height: 12),
+                  ElevatedButton(
+                    onPressed: () => context.go('/legislacao'),
+                    child: const Text('Voltar à lista'),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }
+      },
+      loading: () => Scaffold(
+        appBar: AppBar(title: const Text('Carregando...')),
+        body: const Center(child: CircularProgressIndicator(semanticsLabel: 'Carregando...')),
+      ),
+      error: (e, _) => Scaffold(
+        appBar: AppBar(title: const Text('Erro')),
+        body: Center(child: Text('Erro ao carregar: $e')),
+      ),
+    );
+  }
+}
+
