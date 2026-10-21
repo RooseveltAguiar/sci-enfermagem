@@ -98,16 +98,23 @@ class ScaffoldWithNavBar extends ConsumerWidget {
     final naoLidasCount = ref.watch(notificacoesNaoLidasCountProvider);
 
     final decoratedItems = items.map((item) {
-      if (item.label == 'Notificações' && naoLidasCount > 0) {
+      if (item.label == 'Notificações') {
+        if (naoLidasCount > 0) {
+          return BottomNavigationBarItem(
+            icon: Badge(
+              label: Text('$naoLidasCount'),
+              child: const Icon(Icons.notifications_active),
+            ),
+            activeIcon: Badge(
+              label: Text('$naoLidasCount'),
+              child: const Icon(Icons.notifications_active),
+            ),
+            label: item.label,
+          );
+        }
         return BottomNavigationBarItem(
-          icon: Badge(
-            label: Text('$naoLidasCount'),
-            child: item.icon,
-          ),
-          activeIcon: Badge(
-            label: Text('$naoLidasCount'),
-            child: item.activeIcon,
-          ),
+          icon: const Icon(Icons.notifications_none_outlined),
+          activeIcon: const Icon(Icons.notifications_outlined),
           label: item.label,
         );
       }

@@ -15,6 +15,14 @@ class NotificacoesScreen extends ConsumerStatefulWidget {
 class _NotificacoesScreenState extends ConsumerState<NotificacoesScreen> {
   String _filtroSelecionado = 'todas'; // 'todas', 'nao_lidas', 'mensagem', 'atualizacao', 'informacao'
 
+  @override
+  void initState() {
+    super.initState();
+    Future.microtask(() {
+      ref.read(notificacoesProvider.notifier).loadNotificacoes();
+    });
+  }
+
   String _formatarPerfil(String? p) {
     switch ((p ?? '').toLowerCase().trim()) {
       case 'aluno':
@@ -241,7 +249,7 @@ class _NotificacoesScreenState extends ConsumerState<NotificacoesScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final notificacoesAsync = ref.watch(notificacoesStreamProvider);
+    final notificacoesAsync = ref.watch(notificacoesProvider);
     final meId = ref.watch(currentUserIdProvider);
 
     return Scaffold(

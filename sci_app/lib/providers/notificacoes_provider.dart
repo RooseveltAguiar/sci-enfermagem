@@ -210,8 +210,33 @@ final notificacoesLidasIdsProvider = StateProvider<Set<String>>((ref) => <String
 
 class NotificacoesNotifier extends StateNotifier<AsyncValue<List<Notificacao>>> {
   final Ref ref;
+  StreamSubscription? _realtimeSub;
 
-  NotificacoesNotifier(this.ref) : super(const AsyncValue.loading());
+  NotificacoesNotifier(this.ref) : super(const AsyncValue.data([])) {
+    _initRealtime();
+  }
+
+  void _initRealtime() {
+    final meId = ref.read(currentUserIdProvider);
+    if (meId.isEmpty) return;
+    try {
+      final supabase = ref.read(supabaseClientProvider);
+      _realtimeSub = supabase
+          .from('notificacoes')
+          .stream(primaryKey: ['id'])
+          .eq('destinatario_id', meId)
+          .order('created_at', ascending: false)
+          .listen((_) {
+        loadNotificacoes();
+      }, onError: (_) {});
+    } catch (_) {}
+  }
+
+  @override
+  void dispose() {
+    _realtimeSub?.cancel();
+    super.dispose();
+  }
 
   Future<void> loadNotificacoes() async {
     final meId = ref.read(currentUserIdProvider);
@@ -229,7 +254,8 @@ class NotificacoesNotifier extends StateNotifier<AsyncValue<List<Notificacao>>> 
       try {
         final usrs = await supabase
             .from('usuarios')
-            .select('id, nome, perfil');
+            .select('id, nome, perfil')
+            .timeout(const Duration(seconds: 6));
         for (final u in (usrs as List)) {
           final uid = (u['id'] ?? '').toString();
           if (uid.isNotEmpty) {
@@ -249,16 +275,18 @@ class NotificacoesNotifier extends StateNotifier<AsyncValue<List<Notificacao>>> 
             .from('notificacoes')
             .select('*')
             .order('created_at', ascending: false)
-            .limit(100);
+            .limit(100)
+            .timeout(const Duration(seconds: 6));
 
         final list = response as List;
         for (final n in list) {
           final map = Map<String, dynamic>.from(n as Map);
           final destId = (map['destinatario_id'] ?? map['usuario_id'] ?? '').toString();
           final remId = (map['created_by'] ?? '').toString();
-          if (destId.isEmpty || destId == meId || remId == meId) {
+          if (destId.isEmpty || isUserMatch(destId, meId) || isUserMatch(remId, meId)) {
             var notif = Notificacao.fromJson(map, usuariosMap: usuariosMap);
-            if (lidasLocalSet.contains(notif.id)) {
+            final enviadaPorMim = remId.isNotEmpty && isUserMatch(remId, meId) && !isUserMatch(destId, meId);
+            if (lidasLocalSet.contains(notif.id) || enviadaPorMim) {
               notif = notif.copyWith(lida: true);
             }
             if (idSet.add(notif.id)) {
@@ -272,97 +300,101 @@ class NotificacoesNotifier extends StateNotifier<AsyncValue<List<Notificacao>>> 
 
       // 3. Agrega mensagens enviadas e recebidas (`mensagens` + `conversas`) entre usuários
       try {
-        final convsResp = await supabase
-            .from('conversas')
-            .select('id, participante_1_id, participante_2_id')
-            .or('participante_1_id.eq.$meId,participante_2_id.eq.$meId');
+        if (meId.isNotEmpty) {
+          final convsResp = await supabase
+              .from('conversas')
+              .select('id, participante_1_id, participante_2_id')
+              .or('participante_1_id.eq.$meId,participante_2_id.eq.$meId')
+              .timeout(const Duration(seconds: 6));
 
-        final convMap = <String, Map<String, String>>{};
-        for (final c in (convsResp as List)) {
-          final cid = (c['id'] ?? '').toString();
-          if (cid.isNotEmpty) {
-            convMap[cid] = {
-              'p1': (c['participante_1_id'] ?? '').toString(),
-              'p2': (c['participante_2_id'] ?? '').toString(),
-            };
+          final convMap = <String, Map<String, String>>{};
+          for (final c in (convsResp as List)) {
+            final cid = (c['id'] ?? '').toString();
+            if (cid.isNotEmpty) {
+              convMap[cid] = {
+                'p1': (c['participante_1_id'] ?? '').toString(),
+                'p2': (c['participante_2_id'] ?? '').toString(),
+              };
+            }
           }
-        }
 
-        if (convMap.isNotEmpty) {
-          final msgsResp = await supabase
-              .from('mensagens')
-              .select('id, conversa_id, remetente_id, conteudo, lida, created_at')
-              .inFilter('conversa_id', convMap.keys.toList())
-              .order('created_at', ascending: false)
-              .limit(40);
+          if (convMap.isNotEmpty) {
+            final msgsResp = await supabase
+                .from('mensagens')
+                .select('id, conversa_id, remetente_id, conteudo, lida, created_at')
+                .inFilter('conversa_id', convMap.keys.toList())
+                .order('created_at', ascending: false)
+                .limit(40)
+                .timeout(const Duration(seconds: 6));
 
-          for (final m in (msgsResp as List)) {
-            final msgId = (m['id'] ?? '').toString();
-            final convId = (m['conversa_id'] ?? '').toString();
-            final remId = (m['remetente_id'] ?? '').toString();
-            final conteudo = (m['conteudo'] ?? '').toString();
-            final createdAtStr = (m['created_at'] ?? '').toString();
-            final createdAt = DateTime.tryParse(createdAtStr)?.toLocal() ?? DateTime.now();
-            final lidaDb = m['lida'] == true;
+            for (final m in (msgsResp as List)) {
+              final msgId = (m['id'] ?? '').toString();
+              final convId = (m['conversa_id'] ?? '').toString();
+              final remId = (m['remetente_id'] ?? '').toString();
+              final conteudo = (m['conteudo'] ?? '').toString();
+              final createdAtStr = (m['created_at'] ?? '').toString();
+              final createdAt = DateTime.tryParse(createdAtStr)?.toLocal() ?? DateTime.now();
+              final lidaDb = m['lida'] == true;
 
-            final convParts = convMap[convId];
-            final p1 = convParts?['p1'] ?? '';
-            final p2 = convParts?['p2'] ?? '';
-            final destId = isUserMatch(remId, p1) ? p2 : p1;
+              final convParts = convMap[convId];
+              final p1 = convParts?['p1'] ?? '';
+              final p2 = convParts?['p2'] ?? '';
+              final destId = isUserMatch(remId, p1) ? p2 : p1;
 
-            final isSentByMe = isUserMatch(remId, meId);
-            final remInfo = usuariosMap[remId];
-            final destInfo = usuariosMap[destId];
-            final remNome = remInfo?['nome'] ?? (isSentByMe ? 'Você' : 'Usuário');
-            final remPerfil = remInfo?['perfil'] ?? '';
-            final destNome = destInfo?['nome'] ?? 'Usuário';
+              final isSentByMe = isUserMatch(remId, meId);
+              final remInfo = usuariosMap[remId];
+              final destInfo = usuariosMap[destId];
+              final remNome = remInfo?['nome'] ?? (isSentByMe ? 'Você' : 'Usuário');
+              final remPerfil = remInfo?['perfil'] ?? '';
+              final destNome = destInfo?['nome'] ?? 'Usuário';
 
-            // Verifica se já existe uma notificação em resultList para a mesma conversa no mesmo minuto
-            final jaTemNotifMesmoMinuto = resultList.any((existente) =>
-                existente.referenciaId == convId &&
-                existente.createdAt.difference(createdAt).abs().inSeconds < 15);
-
-            if (jaTemNotifMesmoMinuto) {
-              // Atualiza a notificação existente para exibir o conteúdo real da mensagem
-              final idx = resultList.indexWhere((existente) =>
+              // Verifica se já existe uma notificação em resultList para a mesma conversa no mesmo minuto
+              final jaTemNotifMesmoMinuto = resultList.any((existente) =>
                   existente.referenciaId == convId &&
                   existente.createdAt.difference(createdAt).abs().inSeconds < 15);
-              if (idx >= 0) {
-                final atual = resultList[idx];
+
+              if (jaTemNotifMesmoMinuto) {
+                final idx = resultList.indexWhere((existente) =>
+                    existente.referenciaId == convId &&
+                    existente.createdAt.difference(createdAt).abs().inSeconds < 15);
+                if (idx >= 0) {
+                  final atual = resultList[idx];
+                  final preview = conteudo.length > 80 ? '${conteudo.substring(0, 80)}...' : conteudo;
+                  resultList[idx] = atual.copyWith(
+                    titulo: isSentByMe ? 'Mensagem enviada para $destNome' : 'Mensagem de $remNome',
+                    mensagem: '$remNome: "$preview"',
+                    remetenteNome: remNome,
+                    remetentePerfil: remPerfil,
+                    destinatarioNome: destNome,
+                    lida: isSentByMe || lidaDb || atual.lida,
+                  );
+                }
+                continue;
+              }
+
+              final syntheticId = 'msg-$msgId';
+              if (idSet.add(syntheticId)) {
                 final preview = conteudo.length > 80 ? '${conteudo.substring(0, 80)}...' : conteudo;
-                resultList[idx] = atual.copyWith(
-                  titulo: isSentByMe ? 'Mensagem enviada para $destNome' : 'Mensagem de $remNome',
-                  mensagem: '$remNome: "$preview"',
+                resultList.add(Notificacao(
+                  id: syntheticId,
+                  titulo: isSentByMe ? 'Mensagem enviada para $destNome' : 'Nova mensagem de $remNome',
+                  mensagem: isSentByMe
+                      ? 'Você enviou para $destNome: "$preview"'
+                      : '$remNome enviou: "$preview"',
+                  tipo: isSentByMe ? 'mensagem_enviada' : 'nova_mensagem',
+                  categoria: 'mensagem',
+                  referenciaTipo: 'conversa',
+                  referenciaId: convId,
+                  remetenteId: remId,
                   remetenteNome: remNome,
                   remetentePerfil: remPerfil,
+                  destinatarioId: destId,
                   destinatarioNome: destNome,
-                );
+                  dataCriacao: Notificacao.formatarDataHora(createdAt),
+                  createdAt: createdAt,
+                  lida: isSentByMe || lidaDb || lidasLocalSet.contains(syntheticId),
+                ));
               }
-              continue;
-            }
-
-            final syntheticId = 'msg-$msgId';
-            if (idSet.add(syntheticId)) {
-              final preview = conteudo.length > 80 ? '${conteudo.substring(0, 80)}...' : conteudo;
-              resultList.add(Notificacao(
-                id: syntheticId,
-                titulo: isSentByMe ? 'Mensagem enviada para $destNome' : 'Nova mensagem de $remNome',
-                mensagem: isSentByMe
-                    ? 'Você enviou para $destNome: "$preview"'
-                    : '$remNome enviou: "$preview"',
-                tipo: isSentByMe ? 'mensagem_enviada' : 'nova_mensagem',
-                categoria: 'mensagem',
-                referenciaTipo: 'conversa',
-                referenciaId: convId,
-                remetenteId: remId,
-                remetenteNome: remNome,
-                remetentePerfil: remPerfil,
-                destinatarioId: destId,
-                destinatarioNome: destNome,
-                dataCriacao: Notificacao.formatarDataHora(createdAt),
-                createdAt: createdAt,
-                lida: isSentByMe || lidaDb || lidasLocalSet.contains(syntheticId),
-              ));
             }
           }
         }
@@ -370,14 +402,15 @@ class NotificacoesNotifier extends StateNotifier<AsyncValue<List<Notificacao>>> 
         debugPrint('[NotificacoesNotifier] Aviso ao agregar mensagens: $e');
       }
 
-      // 4. Agrega atualizações de Avaliações (`avaliacoes`)
+      // 4. Agrega atualizações de Avaliações (`avaliacoes`) como histórico de atualizações (lida: true por padrão)
       try {
         final avalResp = await supabase
             .from('avaliacoes')
             .select('id, aluno_id, avaliador_id, tipo, status, nota_geral, created_at, updated_at')
             .isFilter('deleted_at', null)
             .order('updated_at', ascending: false)
-            .limit(20);
+            .limit(20)
+            .timeout(const Duration(seconds: 6));
 
         for (final av in (avalResp as List)) {
           final avId = (av['id'] ?? '').toString();
@@ -424,7 +457,7 @@ class NotificacoesNotifier extends StateNotifier<AsyncValue<List<Notificacao>>> 
               destinatarioNome: alunoNome,
               dataCriacao: Notificacao.formatarDataHora(dt),
               createdAt: dt,
-              lida: isValidada || lidasLocalSet.contains(syntheticId),
+              lida: true,
             ));
           }
         }
@@ -432,14 +465,15 @@ class NotificacoesNotifier extends StateNotifier<AsyncValue<List<Notificacao>>> 
         debugPrint('[NotificacoesNotifier] Aviso ao agregar avaliacoes: $e');
       }
 
-      // 5. Agrega registros e validações de Atividades (`atividades`)
+      // 5. Agrega registros e validações de Atividades (`atividades`) como histórico de atualizações (lida: true por padrão)
       try {
         final ativResp = await supabase
             .from('atividades')
             .select('id, aluno_id, tipo, descricao_outra, status, data_registro, validado_por, created_at, updated_at')
             .isFilter('deleted_at', null)
             .order('updated_at', ascending: false)
-            .limit(20);
+            .limit(20)
+            .timeout(const Duration(seconds: 6));
 
         for (final at in (ativResp as List)) {
           final atId = (at['id'] ?? '').toString();
@@ -479,7 +513,7 @@ class NotificacoesNotifier extends StateNotifier<AsyncValue<List<Notificacao>>> 
               destinatarioNome: alunoNome,
               dataCriacao: Notificacao.formatarDataHora(dt),
               createdAt: dt,
-              lida: !isPendente || lidasLocalSet.contains(syntheticId),
+              lida: true,
             ));
           }
         }
@@ -487,13 +521,14 @@ class NotificacoesNotifier extends StateNotifier<AsyncValue<List<Notificacao>>> 
         debugPrint('[NotificacoesNotifier] Aviso ao agregar atividades: $e');
       }
 
-      // 6. Agrega histórico de atualizações de Frequência (`frequencias_historico_status`)
+      // 6. Agrega histórico de atualizações de Frequência (`frequencias_historico_status`) como histórico (lida: true por padrão)
       try {
         final histResp = await supabase
             .from('frequencias_historico_status')
             .select('id, frequencia_id, status_anterior, status_novo, alterado_por, alterado_em')
             .order('alterado_em', ascending: false)
-            .limit(20);
+            .limit(20)
+            .timeout(const Duration(seconds: 6));
 
         for (final h in (histResp as List)) {
           final hId = (h['id'] ?? '').toString();
@@ -545,9 +580,7 @@ class NotificacoesNotifier extends StateNotifier<AsyncValue<List<Notificacao>>> 
               remetentePerfil: autorPerfil,
               dataCriacao: Notificacao.formatarDataHora(dt),
               createdAt: dt,
-              lida: statusNovo == 'validado' ||
-                  statusNovo == 'ratificado' ||
-                  lidasLocalSet.contains(syntheticId),
+              lida: true,
             ));
           }
         }
@@ -557,9 +590,14 @@ class NotificacoesNotifier extends StateNotifier<AsyncValue<List<Notificacao>>> 
 
       // 7. Mescla notificações criadas localmente na sessão
       for (final loc in locais) {
-        if (loc.destinatarioId == meId || loc.remetenteId == meId || meId.isEmpty) {
+        if (isUserMatch(loc.destinatarioId, meId) ||
+            (loc.remetenteId != null && isUserMatch(loc.remetenteId!, meId)) ||
+            meId.isEmpty) {
           if (idSet.add(loc.id)) {
             final dt = loc.createdAt ?? DateTime.now();
+            final enviadaPorMim = loc.remetenteId != null &&
+                isUserMatch(loc.remetenteId!, meId) &&
+                !isUserMatch(loc.destinatarioId, meId);
             resultList.add(Notificacao(
               id: loc.id,
               titulo: loc.titulo,
@@ -578,7 +616,7 @@ class NotificacoesNotifier extends StateNotifier<AsyncValue<List<Notificacao>>> 
                   ? Notificacao.formatarDataHora(dt)
                   : loc.dataCriacao,
               createdAt: dt,
-              lida: loc.lida || lidasLocalSet.contains(loc.id),
+              lida: loc.lida || enviadaPorMim || lidasLocalSet.contains(loc.id),
             ));
           }
         }
@@ -588,12 +626,8 @@ class NotificacoesNotifier extends StateNotifier<AsyncValue<List<Notificacao>>> 
       resultList.sort((a, b) => b.createdAt.compareTo(a.createdAt));
 
       state = AsyncValue.data(resultList);
-    } catch (e, stack) {
-      if (resultList.isNotEmpty) {
-        state = AsyncValue.data(resultList);
-      } else {
-        state = AsyncValue.error(e, stack);
-      }
+    } catch (e) {
+      state = AsyncValue.data(resultList);
     }
   }
 
@@ -689,9 +723,18 @@ class NotificacoesNotifier extends StateNotifier<AsyncValue<List<Notificacao>>> 
       );
     }
 
+    // Se for uma mensagem sintética (msg-<uuid>), também marca a mensagem como lida no banco
+    if (id.startsWith('msg-')) {
+      final msgId = id.substring(4);
+      try {
+        final supabase = ref.read(supabaseClientProvider);
+        await supabase.from('mensagens').update({'lida': true}).eq('id', msgId);
+      } catch (_) {}
+      return;
+    }
+
     // Se for um UUID real da tabela notificacoes, marca como lida via RPC e update direto
-    if (!id.startsWith('msg-') &&
-        !id.startsWith('aval-') &&
+    if (!id.startsWith('aval-') &&
         !id.startsWith('ativ-') &&
         !id.startsWith('freqhist-') &&
         !id.startsWith('notif-')) {
@@ -707,8 +750,23 @@ class NotificacoesNotifier extends StateNotifier<AsyncValue<List<Notificacao>>> 
   }
 
   Future<void> marcarTodasComoLidas() async {
+    final realNotifIds = <String>[];
+    final realMsgIds = <String>[];
+
     if (state.hasValue) {
       final atual = state.value!;
+      for (final n in atual) {
+        if (!n.lida) {
+          if (n.id.startsWith('msg-')) {
+            realMsgIds.add(n.id.substring(4));
+          } else if (!n.id.startsWith('aval-') &&
+              !n.id.startsWith('ativ-') &&
+              !n.id.startsWith('freqhist-') &&
+              !n.id.startsWith('notif-')) {
+            realNotifIds.add(n.id);
+          }
+        }
+      }
       final allIds = atual.map((n) => n.id).toSet();
       ref.read(notificacoesLidasIdsProvider.notifier).update((set) => {...set, ...allIds});
       state = AsyncValue.data(
@@ -719,7 +777,7 @@ class NotificacoesNotifier extends StateNotifier<AsyncValue<List<Notificacao>>> 
     final meId = ref.read(currentUserIdProvider);
     ref.read(notificacoesLocaisProvider.notifier).update((list) {
       return list
-          .map((n) => (n.destinatarioId == meId || meId.isEmpty)
+          .map((n) => (isUserMatch(n.destinatarioId, meId) || meId.isEmpty)
               ? NotificacaoLocalItem(
                   id: n.id,
                   destinatarioId: n.destinatarioId,
@@ -743,18 +801,24 @@ class NotificacoesNotifier extends StateNotifier<AsyncValue<List<Notificacao>>> 
 
     try {
       final supabase = ref.read(supabaseClientProvider);
-      try {
-        await supabase.rpc('fn_marcar_todas_notificacoes_lidas');
-      } catch (_) {
-        final userId = supabase.auth.currentUser?.id ??
-            ref.read(authStateProvider).value?.session?.user.id;
-        if (userId != null) {
-          await supabase
-              .from('notificacoes')
-              .update({'lida': true})
-              .eq('destinatario_id', userId)
-              .eq('lida', false);
-        }
+      if (realNotifIds.isNotEmpty) {
+        await supabase
+            .from('notificacoes')
+            .update({'lida': true})
+            .inFilter('id', realNotifIds);
+      }
+      if (realMsgIds.isNotEmpty) {
+        await supabase
+            .from('mensagens')
+            .update({'lida': true})
+            .inFilter('id', realMsgIds);
+      }
+      if (meId.isNotEmpty) {
+        await supabase
+            .from('notificacoes')
+            .update({'lida': true})
+            .eq('destinatario_id', meId)
+            .eq('lida', false);
       }
     } catch (_) {}
   }
@@ -768,56 +832,15 @@ final notificacoesProvider = StateNotifierProvider<NotificacoesNotifier, AsyncVa
 });
 
 // StreamProvider Realtime para inscrição ao vivo da tabela notificacoes e mensagens
-final notificacoesStreamProvider = StreamProvider.autoDispose<List<Notificacao>>((ref) {
-  final supabase = ref.read(supabaseClientProvider);
-  final meId = ref.watch(currentUserIdProvider);
-
-  if (meId.isEmpty) return Stream.value([]);
-
+final notificacoesStreamProvider = StreamProvider.autoDispose<List<Notificacao>>((ref) async* {
   final notifState = ref.watch(notificacoesProvider);
-
-  final controller = StreamController<List<Notificacao>>.broadcast();
-
-  if (notifState.hasValue) {
-    controller.add(notifState.value!);
-  } else {
-    ref.read(notificacoesProvider.notifier).loadNotificacoes().then((_) {
-      if (!controller.isClosed) {
-        controller.add(ref.read(notificacoesProvider).value ?? []);
-      }
-    });
-  }
-
-  StreamSubscription? subNotif;
-  try {
-    final stream = supabase
-        .from('notificacoes')
-        .stream(primaryKey: ['id'])
-        .eq('destinatario_id', meId)
-        .order('created_at', ascending: false);
-
-    subNotif = stream.listen((_) async {
-      await ref.read(notificacoesProvider.notifier).loadNotificacoes();
-      if (!controller.isClosed) {
-        controller.add(ref.read(notificacoesProvider).value ?? []);
-      }
-    }, onError: (e) {});
-  } catch (_) {}
-
-  controller.onCancel = () {
-    subNotif?.cancel();
-  };
-
-  return controller.stream;
+  yield notifState.value ?? const <Notificacao>[];
 });
 
 final notificacoesNaoLidasCountProvider = Provider<int>((ref) {
-  final asyncStream = ref.watch(notificacoesStreamProvider);
-  return asyncStream.maybeWhen(
+  final notifState = ref.watch(notificacoesProvider);
+  return notifState.maybeWhen(
     data: (notificacoes) => notificacoes.where((n) => !n.lida).length,
-    orElse: () => ref.watch(notificacoesProvider).maybeWhen(
-      data: (notificacoes) => notificacoes.where((n) => !n.lida).length,
-      orElse: () => 0,
-    ),
+    orElse: () => 0,
   );
 });
