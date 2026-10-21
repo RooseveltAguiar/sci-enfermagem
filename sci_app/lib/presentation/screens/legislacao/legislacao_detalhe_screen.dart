@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import '../../../data/models/legislacao_model.dart';
 import '../../../providers/auth_provider.dart';
+import '../../../providers/legislacao_provider.dart';
+import 'legislacao_form_screen.dart';
 
 class LegislacaoDetalheScreen extends ConsumerWidget {
   final LegislacaoModel doc;
@@ -40,8 +41,14 @@ class LegislacaoDetalheScreen extends ConsumerWidget {
                 IconButton(
                   icon: const Icon(Icons.edit),
                   tooltip: 'Editar',
-                  onPressed: () =>
-                      context.push('/legislacao/${doc.id}/editar', extra: doc),
+                  onPressed: () async {
+                    await Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => LegislacaoFormScreen(doc: doc),
+                      ),
+                    );
+                    ref.read(legislacoesProvider.notifier).carregarLegislacoes();
+                  },
                 ),
               ]
             : null,

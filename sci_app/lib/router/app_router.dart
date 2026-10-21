@@ -443,6 +443,36 @@ final goRouterProvider = Provider<GoRouter>((ref) {
               GoRoute(
                 path: '/professor/legislacao',
                 builder: (context, state) => const LegislacaoListaScreen(),
+                routes: [
+                  GoRoute(
+                    path: 'novo',
+                    builder: (context, state) => const LegislacaoFormScreen(),
+                  ),
+                  GoRoute(
+                    path: 'nova',
+                    builder: (context, state) => const LegislacaoFormScreen(),
+                  ),
+                  GoRoute(
+                    path: ':id',
+                    builder: (context, state) {
+                      final id = state.pathParameters['id'] ?? '';
+                      if (id == 'novo' || id == 'nova') {
+                        return const LegislacaoFormScreen();
+                      }
+                      final doc = state.extra as LegislacaoModel?;
+                      if (doc != null) {
+                        return LegislacaoDetalheScreen(doc: doc);
+                      }
+                      return _LegislacaoDetalheLoader(id: id);
+                    },
+                    routes: [
+                      GoRoute(
+                        path: 'editar',
+                        builder: (context, state) => LegislacaoFormScreen(doc: state.extra as LegislacaoModel?),
+                      ),
+                    ],
+                  ),
+                ],
               ),
             ],
           ),

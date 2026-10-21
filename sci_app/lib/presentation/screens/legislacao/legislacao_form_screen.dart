@@ -127,7 +127,11 @@ class _LegislacaoFormScreenState extends ConsumerState<LegislacaoFormScreen> {
                   ? 'Legislação atualizada.'
                   : 'Legislação cadastrada.')),
         );
-        context.pop();
+        if (Navigator.of(context).canPop()) {
+          Navigator.of(context).pop();
+        } else {
+          context.go('/legislacao');
+        }
       }
     } catch (e) {
       if (mounted) {
@@ -158,7 +162,11 @@ class _LegislacaoFormScreenState extends ConsumerState<LegislacaoFormScreen> {
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(content: Text('Documento desativado.')),
             );
-            context.go('/legislacao');
+            if (Navigator.of(context).canPop()) {
+              Navigator.of(context).pop();
+            } else {
+              context.go('/legislacao');
+            }
           }
         } catch (e) {
           if (mounted) {

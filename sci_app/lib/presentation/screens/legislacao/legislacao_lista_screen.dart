@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import '../../../data/models/legislacao_model.dart';
 import '../../../providers/auth_provider.dart';
 import '../../../providers/legislacao_provider.dart';
+import 'legislacao_detalhe_screen.dart';
+import 'legislacao_form_screen.dart';
 
 class LegislacaoListaScreen extends ConsumerWidget {
   const LegislacaoListaScreen({super.key});
@@ -23,7 +24,14 @@ class LegislacaoListaScreen extends ConsumerWidget {
       ),
       floatingActionButton: podeEditar
           ? FloatingActionButton.extended(
-              onPressed: () => context.push('/legislacao/novo'),
+              onPressed: () async {
+                await Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => const LegislacaoFormScreen(),
+                  ),
+                );
+                ref.read(legislacoesProvider.notifier).carregarLegislacoes();
+              },
               icon: const Icon(Icons.add),
               label: const Text('Nova Legislação'),
             )
@@ -85,7 +93,14 @@ class LegislacaoListaScreen extends ConsumerWidget {
                 final doc = lista[index];
                 return _LegislacaoCard(
                   doc: doc,
-                  onTap: () => context.push('/legislacao/${doc.id}', extra: doc),
+                  onTap: () async {
+                    await Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => LegislacaoDetalheScreen(doc: doc),
+                      ),
+                    );
+                    ref.read(legislacoesProvider.notifier).carregarLegislacoes();
+                  },
                 );
               },
             );
