@@ -79,31 +79,105 @@ class ProgressoVisitasMensal {
   bool get atingiuMinimo => realizadas >= minimasRequeridas;
 }
 
-final camposDoProfessorProvider = FutureProvider.autoDispose<List<({String id, String nome})>>((ref) async {
+class CampoProfessor {
+  final String id;
+  final String nome;
+  final double lat;
+  final double lng;
+  final double raioMetros;
+
+  const CampoProfessor({
+    required this.id,
+    required this.nome,
+    required this.lat,
+    required this.lng,
+    this.raioMetros = 300.0,
+  });
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is CampoProfessor && runtimeType == other.runtimeType && id == other.id;
+
+  @override
+  int get hashCode => id.hashCode;
+}
+
+class VisitaEmAndamento {
+  final String campoId;
+  final String campoNome;
+  final String turno;
+  final DateTime horaInicio;
+  final double latInicio;
+  final double lngInicio;
+  final double distanciaInicioMetros;
+
+  const VisitaEmAndamento({
+    required this.campoId,
+    required this.campoNome,
+    required this.turno,
+    required this.horaInicio,
+    required this.latInicio,
+    required this.lngInicio,
+    required this.distanciaInicioMetros,
+  });
+}
+
+final visitaEmAndamentoProvider = StateProvider<VisitaEmAndamento?>((ref) => null);
+
+final camposDoProfessorProvider = FutureProvider.autoDispose<List<CampoProfessor>>((ref) async {
   final supabase = ref.read(supabaseClientProvider);
   final meId = supabase.auth.currentUser?.id;
   if (meId == null || meId.isEmpty) return [];
 
+  final result = <CampoProfessor>[];
+  final vistos = <String>{};
+
   try {
     final response = await supabase
         .from('professor_turmas')
-        .select('campo_id, campos_estagio(id, nome)')
+        .select('campo_id, campos_estagio(id, nome, lat, lng, raio_metros, deleted_at)')
         .eq('professor_id', meId);
 
-    final vistos = <String>{};
-    final result = <({String id, String nome})>[];
     for (final row in response as List) {
       final campo = row['campos_estagio'] as Map<String, dynamic>?;
-      final id = campo?['id']?.toString();
-      final nome = campo?['nome']?.toString();
-      if (id != null && nome != null && vistos.add(id)) {
-        result.add((id: id, nome: nome));
+      if (campo != null && campo['deleted_at'] == null) {
+        final id = campo['id']?.toString();
+        final nome = campo['nome']?.toString();
+        final lat = campo['lat'] != null ? (campo['lat'] as num).toDouble() : -3.7319;
+        final lng = campo['lng'] != null ? (campo['lng'] as num).toDouble() : -38.5267;
+        final raio = campo['raio_metros'] != null ? (campo['raio_metros'] as num).toDouble() : 300.0;
+        if (id != null && nome != null && vistos.add(id)) {
+          result.add(CampoProfessor(id: id, nome: nome, lat: lat, lng: lng, raioMetros: raio));
+        }
       }
     }
-    return result;
-  } catch (_) {
-    return [];
-  }
+  } catch (_) {}
+
+  if (result.isNotEmpty) return result;
+
+  // Fallback: busca todos os campos de estágio ativos para que o professor sempre tenha campos disponíveis
+  try {
+    final allCampos = await supabase
+        .from('campos_estagio')
+        .select('id, nome, lat, lng, raio_metros')
+        .isFilter('deleted_at', null)
+        .order('nome');
+
+    for (final row in allCampos as List) {
+      final m = Map<String, dynamic>.from(row as Map);
+      final id = m['id']?.toString();
+      final nome = m['nome']?.toString();
+      final lat = m['lat'] != null ? (m['lat'] as num).toDouble() : -3.7319;
+      final lng = m['lng'] != null ? (m['lng'] as num).toDouble() : -38.5267;
+      final raio = m['raio_metros'] != null ? (m['raio_metros'] as num).toDouble() : 300.0;
+      if (id != null && nome != null && vistos.add(id)) {
+        result.add(CampoProfessor(id: id, nome: nome, lat: lat, lng: lng, raioMetros: raio));
+      }
+    }
+  } catch (_) {}
+
+  return result;
 });
 
 final minhasVisitasProvider = FutureProvider.autoDispose<List<VisitaTecnica>>((ref) async {
@@ -231,6 +305,12 @@ class VisitasService {
     required double? lng,
     required bool gpsDisponivel,
     double? distanciaMetros,
+    DateTime? horaInicio,
+    DateTime? horaFim,
+    String? turno,
+    double? latSaida,
+    double? lngSaida,
+    double? distanciaSaidaMetros,
   }) async {
     final relatoTrim = relato.trim();
     if (relatoTrim.length < 30) {
@@ -244,10 +324,26 @@ class VisitasService {
       throw Exception('Usuário não autenticado');
     }
 
+    String relatoFinal = relatoTrim;
+    if (horaInicio != null && horaFim != null) {
+      final duracao = horaFim.difference(horaInicio);
+      final duracaoStr = '${duracao.inHours}h ${duracao.inMinutes.remainder(60).toString().padLeft(2, '0')}min';
+      final hInicioStr = '${horaInicio.hour.toString().padLeft(2, '0')}:${horaInicio.minute.toString().padLeft(2, '0')}:${horaInicio.second.toString().padLeft(2, '0')}';
+      final hFimStr = '${horaFim.hour.toString().padLeft(2, '0')}:${horaFim.minute.toString().padLeft(2, '0')}:${horaFim.second.toString().padLeft(2, '0')}';
+
+      relatoFinal = '[REGISTRO ELETRÔNICO DE VISITA TÉCNICA]\n'
+          'Turno: ${turno ?? 'Manhã'}\n'
+          'Entrada (Início): $hInicioStr\n'
+          'Saída (Término): $hFimStr\n'
+          'Tempo de Permanência em Campo: $duracaoStr\n'
+          '--------------------------------------------------\n'
+          'RELATÓRIO DA VISITA:\n$relatoTrim';
+    }
+
     await supabase.from('visitas_tecnicas').insert({
       'professor_id': meId,
       'campo_id': campoId,
-      'relato': relatoTrim,
+      'relato': relatoFinal,
       'status': 'pendente_validacao',
       'lat': lat,
       'lng': lng,
@@ -255,6 +351,7 @@ class VisitasService {
       'distancia_metros': distanciaMetros,
     });
 
+    ref.read(visitaEmAndamentoProvider.notifier).state = null;
     ref.invalidate(minhasVisitasProvider);
     ref.invalidate(progressoVisitasMensalProvider);
   }
