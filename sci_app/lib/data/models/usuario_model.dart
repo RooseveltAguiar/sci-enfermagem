@@ -6,6 +6,7 @@ class UsuarioModel {
   final String perfil;
   final bool ativo;
   final DateTime? deletedAt;
+  final DateTime? createdAt;
 
   const UsuarioModel({
     required this.id,
@@ -15,6 +16,7 @@ class UsuarioModel {
     required this.perfil,
     this.ativo = true,
     this.deletedAt,
+    this.createdAt,
   });
 
   String get cpfMascarado {
@@ -39,6 +41,9 @@ class UsuarioModel {
       deletedAt: json['deleted_at'] != null
           ? DateTime.tryParse(json['deleted_at'].toString())
           : null,
+      createdAt: json['created_at'] != null
+          ? DateTime.tryParse(json['created_at'].toString())
+          : null,
     );
   }
 
@@ -51,6 +56,7 @@ class UsuarioModel {
       'perfil': perfil,
       'ativo': ativo,
       'deleted_at': deletedAt?.toIso8601String(),
+      'created_at': createdAt?.toIso8601String(),
     };
   }
 
@@ -62,6 +68,7 @@ class UsuarioModel {
     String? perfil,
     bool? ativo,
     DateTime? deletedAt,
+    DateTime? createdAt,
   }) {
     return UsuarioModel(
       id: id ?? this.id,
@@ -71,6 +78,7 @@ class UsuarioModel {
       perfil: perfil ?? this.perfil,
       ativo: ativo ?? this.ativo,
       deletedAt: deletedAt ?? this.deletedAt,
+      createdAt: createdAt ?? this.createdAt,
     );
   }
 
