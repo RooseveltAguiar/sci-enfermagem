@@ -94,12 +94,14 @@ class EstadoJornadaHoje {
   final StatusJornada status;
   final Frequencia? frequenciaAtual;
   final DateTime? horaEntrada;
+  final DateTime? horaSaida;
   final double horasEmCampo;
 
   const EstadoJornadaHoje({
     required this.status,
     this.frequenciaAtual,
     this.horaEntrada,
+    this.horaSaida,
     this.horasEmCampo = 0.0,
   });
 }
@@ -334,10 +336,20 @@ final frequenciaHojeProvider = FutureProvider.autoDispose<EstadoJornadaHoje>((re
       horaEntrada = DateTime.tryParse(freq.timestampEntradaCliente!)?.toLocal();
     }
 
+    DateTime? horaSaida;
+    if (freq.timestampSaidaCliente != null) {
+      horaSaida = DateTime.tryParse(freq.timestampSaidaCliente!)?.toLocal();
+    }
+
     final now = DateTime.now();
     double horasEmCampo = 0.0;
-    if (horaEntrada != null) {
+    if (hasCheckout && horaEntrada != null && horaSaida != null) {
+      horasEmCampo = (horaSaida.difference(horaEntrada).inMinutes / 60.0).clamp(0.0, 24.0);
+    } else if (horaEntrada != null) {
       horasEmCampo = (now.difference(horaEntrada).inMinutes / 60.0).clamp(0.0, 24.0);
+    }
+    if (freq.horasTrabalhadas != null && freq.horasTrabalhadas! > 0) {
+      horasEmCampo = freq.horasTrabalhadas!;
     }
 
     if (hasCheckout) {
@@ -345,6 +357,7 @@ final frequenciaHojeProvider = FutureProvider.autoDispose<EstadoJornadaHoje>((re
         status: StatusJornada.finalizado,
         frequenciaAtual: freq,
         horaEntrada: horaEntrada,
+        horaSaida: horaSaida,
         horasEmCampo: horasEmCampo,
       );
     } else {
@@ -352,6 +365,7 @@ final frequenciaHojeProvider = FutureProvider.autoDispose<EstadoJornadaHoje>((re
         status: StatusJornada.emCampo,
         frequenciaAtual: freq,
         horaEntrada: horaEntrada,
+        horaSaida: horaSaida,
         horasEmCampo: horasEmCampo,
       );
     }

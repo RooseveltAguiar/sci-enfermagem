@@ -179,9 +179,12 @@ void main() {
       final notifs = [
         Notificacao(
           id: 'notif-1',
+          titulo: 'Nova Mensagem',
           mensagem: 'Nova mensagem de Coordenação Teste QA (coordenacao): "Olá Aluno, seu relatório de estágio foi aprovado..."',
           tipo: 'info',
+          categoria: 'mensagem',
           dataCriacao: 'há 5 min',
+          createdAt: DateTime.now(),
           lida: false,
         ),
       ];

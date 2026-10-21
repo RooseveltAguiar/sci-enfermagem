@@ -1,7 +1,7 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../main.dart';
 import '../../../providers/auth_provider.dart';
@@ -17,70 +17,48 @@ class RegistrarPresencaScreen extends ConsumerStatefulWidget {
 }
 
 class _RegistrarPresencaScreenState extends ConsumerState<RegistrarPresencaScreen> {
-  int _currentStep = 0;
+  Timer? _relogioTimer;
+  DateTime _agora = DateTime.now();
+
   CampoEstagio? _selectedCampo;
   String? _selectedTurno;
-  
-  bool _isGettingLocation = false;
-  bool _locationObtained = false;
-  double? _lat;
-  double? _lng;
-  double? _precisaoGps;
-  double? _distanciaMetros;
-  bool _dentroDoRaio = false;
-  String? _erroLocalizacao;
-  
+
+  // Estado GPS Check-in
+  bool _isGettingLocationCheckin = false;
+  bool _locationObtainedCheckin = false;
+  double? _latCheckin;
+  double? _lngCheckin;
+  double? _precisaoGpsCheckin;
+  double? _distanciaMetrosCheckin;
+  bool _dentroDoRaioCheckin = false;
+  String? _erroLocalizacaoCheckin;
+
+  // Estado GPS Check-out
+  bool _isGettingLocationCheckout = false;
+  bool _locationObtainedCheckout = false;
+  double? _latCheckout;
+  double? _lngCheckout;
+  double? _precisaoGpsCheckout;
+  double? _distanciaMetrosCheckout;
+  bool _dentroDoRaioCheckout = false;
+  String? _erroLocalizacaoCheckout;
+
   @override
-  Widget build(BuildContext context) {
-    final camposAsync = ref.watch(camposAlunoProvider);
-    final jornadaAsync = ref.watch(frequenciaHojeProvider);
+  void initState() {
+    super.initState();
+    _relogioTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (mounted) {
+        setState(() {
+          _agora = DateTime.now();
+        });
+      }
+    });
+  }
 
-    return Scaffold(
-      appBar: AppBar(title: const Text('Registrar Presença / Saída')),
-      body: jornadaAsync.when(
-        data: (jornada) {
-          // Se o aluno já realizou o Check-in e está em campo, exibe o modo Check-out
-          if (jornada.status == StatusJornada.emCampo) {
-            return _buildCheckoutMode(context, jornada);
-          }
-
-          if (jornada.status == StatusJornada.finalizado) {
-            return Center(
-              child: Padding(
-                padding: const EdgeInsets.all(24.0),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    const Icon(Icons.check_circle_rounded, color: Color(0xFF1B6B45), size: 64),
-                    const SizedBox(height: 16),
-                    const Text(
-                      'Jornada de hoje finalizada!',
-                      style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      'Entrada e saída registradas com sucesso para ${jornada.frequenciaAtual?.campoNome ?? 'o campo'}.',
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(color: Colors.grey),
-                    ),
-                    const SizedBox(height: 24),
-                    ElevatedButton(
-                      onPressed: () => context.go('/aluno/home'),
-                      child: const Text('Voltar ao Início'),
-                    ),
-                  ],
-                ),
-              ),
-            );
-          }
-
-          // Modo Padrão: Check-in
-          return _buildCheckinStepper(context, camposAsync);
-        },
-        loading: () => const Center(child: CircularProgressIndicator(semanticsLabel: 'Carregando...')),
-        error: (err, stack) => Center(child: Text('Erro: $err')),
-      ),
-    );
+  @override
+  void dispose() {
+    _relogioTimer?.cancel();
+    super.dispose();
   }
 
   String _formatarDistancia(double? metros) {
@@ -91,11 +69,59 @@ class _RegistrarPresencaScreenState extends ConsumerState<RegistrarPresencaScree
     return '${metros.toStringAsFixed(0)} metros';
   }
 
-  CampoEstagio? _obterCampoParaValidacao(EstadoJornadaHoje? jornada) {
+  String _formatarHora(DateTime? dt) {
+    if (dt == null) return '--:--:--';
+    final h = dt.hour.toString().padLeft(2, '0');
+    final m = dt.minute.toString().padLeft(2, '0');
+    final s = dt.second.toString().padLeft(2, '0');
+    return '$h:$m:$s';
+  }
+
+  String _formatarHoraCurta(DateTime? dt) {
+    if (dt == null) return '--:--';
+    final h = dt.hour.toString().padLeft(2, '0');
+    final m = dt.minute.toString().padLeft(2, '0');
+    return '$h:$m';
+  }
+
+  String _formatarData(DateTime dt) {
+    final d = dt.day.toString().padLeft(2, '0');
+    final m = dt.month.toString().padLeft(2, '0');
+    final y = dt.year.toString();
+    return '$d/$m/$y';
+  }
+
+  String _calcularTempoEmCampo(EstadoJornadaHoje jornada) {
+    if (jornada.status == StatusJornada.semCheckin || jornada.horaEntrada == null) {
+      return '0h 00min 00s';
+    }
+
+    if (jornada.status == StatusJornada.finalizado) {
+      if (jornada.horaEntrada != null && jornada.horaSaida != null) {
+        final diff = jornada.horaSaida!.difference(jornada.horaEntrada!);
+        final h = diff.inHours;
+        final m = diff.inMinutes.remainder(60);
+        final s = diff.inSeconds.remainder(60);
+        return '${h}h ${m.toString().padLeft(2, '0')}min ${s.toString().padLeft(2, '0')}s';
+      }
+      final h = jornada.horasEmCampo;
+      final horas = h.floor();
+      final mins = ((h - horas) * 60).round();
+      return '${horas}h ${mins.toString().padLeft(2, '0')}min';
+    }
+
+    // Em campo (em andamento com cronômetro em tempo real)
+    final diff = _agora.difference(jornada.horaEntrada!);
+    final h = diff.inHours;
+    final m = diff.inMinutes.remainder(60).toString().padLeft(2, '0');
+    final s = diff.inSeconds.remainder(60).toString().padLeft(2, '0');
+    return '${h}h ${m}min ${s}s';
+  }
+
+  CampoEstagio? _obterCampoParaValidacao(EstadoJornadaHoje? jornada, List<CampoEstagio> campos) {
     if (_selectedCampo != null) return _selectedCampo;
-    final campos = ref.read(camposAlunoProvider).valueOrNull ?? [];
     final nomeFrequencia = jornada?.frequenciaAtual?.campoNome;
-    if (nomeFrequencia != null) {
+    if (nomeFrequencia != null && campos.isNotEmpty) {
       try {
         return campos.firstWhere((c) => c.nome.toLowerCase() == nomeFrequencia.toLowerCase());
       } catch (_) {}
@@ -103,446 +129,838 @@ class _RegistrarPresencaScreenState extends ConsumerState<RegistrarPresencaScree
     return campos.isNotEmpty ? campos.first : null;
   }
 
-  Widget _buildCheckoutMode(BuildContext context, EstadoJornadaHoje jornada) {
-    final freq = jornada.frequenciaAtual;
-    final horaEntradaStr = jornada.horaEntrada != null
-        ? '${jornada.horaEntrada!.hour.toString().padLeft(2, '0')}:${jornada.horaEntrada!.minute.toString().padLeft(2, '0')}'
-        : '07:00';
-    final horasEmCampo = jornada.horasEmCampo;
-    final campo = _obterCampoParaValidacao(jornada);
+  @override
+  Widget build(BuildContext context) {
+    final camposAsync = ref.watch(camposAlunoProvider);
+    final jornadaAsync = ref.watch(frequenciaHojeProvider);
 
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(20.0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Card(
-            color: const Color(0xFF1B6B45).withValues(alpha: 0.08),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(16),
-              side: BorderSide(color: const Color(0xFF1B6B45).withValues(alpha: 0.3)),
-            ),
-            child: Padding(
-              padding: const EdgeInsets.all(20.0),
-              child: Column(
-                children: [
-                  const Icon(Icons.timer_outlined, color: Color(0xFF1B6B45), size: 48),
-                  const SizedBox(height: 12),
-                  const Text(
-                    'Você está Em Campo',
-                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Color(0xFF1B6B45)),
-                  ),
-                  const SizedBox(height: 6),
-                  Text('Campo: ${freq?.campoNome ?? 'Estágio de Enfermagem'}'),
-                  Text('Entrada registrada às $horaEntradaStr'),
-                  const SizedBox(height: 12),
-                  Chip(
-                    label: Text('${horasEmCampo.toStringAsFixed(1)}h decorridas hoje'),
-                    backgroundColor: Colors.white,
-                    labelStyle: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF1B6B45)),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(height: 24),
-          const Text('Check-out com Validação GPS', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-          const SizedBox(height: 12),
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Registrar Presença / Saída'),
+      ),
+      body: jornadaAsync.when(
+        data: (jornada) {
+          final campos = camposAsync.valueOrNull ?? [];
+          if (_selectedCampo == null && campos.isNotEmpty) {
+            _selectedCampo = _obterCampoParaValidacao(jornada, campos);
+          }
+          _selectedTurno ??= jornada.frequenciaAtual?.turnoDescricao ?? 'Manhã';
 
-          if (_isGettingLocation)
-            const Column(
+          final campoAtivo = _obterCampoParaValidacao(jornada, campos);
+          final jaFezCheckin = jornada.status == StatusJornada.emCampo || jornada.status == StatusJornada.finalizado;
+          final jaFezCheckout = jornada.status == StatusJornada.finalizado;
+          final isEmCampo = jornada.status == StatusJornada.emCampo;
+
+          return SingleChildScrollView(
+            padding: const EdgeInsets.all(16.0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                CircularProgressIndicator(semanticsLabel: 'Carregando...'),
-                SizedBox(height: 16),
-                Text('Obtendo localização de saída via GPS...'),
+                // 1. Card de Dados / Seleção do Estágio
+                Card(
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                    side: BorderSide(color: Colors.grey.shade300),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.all(16.0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            const Icon(Icons.location_city_rounded, color: Color(0xFF1B6B45), size: 22),
+                            const SizedBox(width: 8),
+                            const Text(
+                              'Campo e Turno do Estágio',
+                              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                            ),
+                            const Spacer(),
+                            Chip(
+                              visualDensity: VisualDensity.compact,
+                              label: Text(_formatarData(_agora)),
+                              backgroundColor: const Color(0xFF1B6B45).withValues(alpha: 0.1),
+                              labelStyle: const TextStyle(fontWeight: FontWeight.bold, color: Color(0xFF1B6B45), fontSize: 12),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        if (!jaFezCheckin) ...[
+                          if (campos.isEmpty)
+                            const Text(
+                              'Nenhum campo de estágio ativo no momento.',
+                              style: TextStyle(color: Colors.red),
+                            )
+                          else ...[
+                            DropdownButtonFormField<CampoEstagio>(
+                              decoration: const InputDecoration(
+                                labelText: 'Campo de Estágio',
+                                border: OutlineInputBorder(),
+                                contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                              ),
+                              initialValue: _selectedCampo ?? (campos.isNotEmpty ? campos.first : null),
+                              items: campos.map((c) => DropdownMenuItem(value: c, child: Text(c.nome, overflow: TextOverflow.ellipsis))).toList(),
+                              onChanged: (val) {
+                                setState(() {
+                                  _selectedCampo = val;
+                                  _locationObtainedCheckin = false;
+                                  _dentroDoRaioCheckin = false;
+                                  _erroLocalizacaoCheckin = null;
+                                });
+                              },
+                            ),
+                            const SizedBox(height: 12),
+                            DropdownButtonFormField<String>(
+                              decoration: const InputDecoration(
+                                labelText: 'Turno',
+                                border: OutlineInputBorder(),
+                                contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                              ),
+                              initialValue: _selectedTurno,
+                              items: ['Manhã', 'Tarde', 'Noite'].map((t) => DropdownMenuItem(value: t, child: Text(t))).toList(),
+                              onChanged: (val) => setState(() => _selectedTurno = val),
+                            ),
+                          ],
+                        ] else ...[
+                          Text(
+                            campoAtivo?.nome ?? jornada.frequenciaAtual?.campoNome ?? 'Estágio de Enfermagem',
+                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            'Turno: ${jornada.frequenciaAtual?.turnoDescricao ?? _selectedTurno ?? 'Manhã'}',
+                            style: const TextStyle(color: Colors.black87),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+
+                const SizedBox(height: 16),
+
+                // 2. Card de Tempo de Permanência no Campo
+                Card(
+                  elevation: 0,
+                  color: isEmCampo
+                      ? const Color(0xFF1B6B45).withValues(alpha: 0.08)
+                      : (jaFezCheckout ? Colors.blue.shade50 : Colors.grey.shade50),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                    side: BorderSide(
+                      color: isEmCampo
+                          ? const Color(0xFF1B6B45).withValues(alpha: 0.3)
+                          : (jaFezCheckout ? Colors.blue.shade200 : Colors.grey.shade300),
+                    ),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.all(20.0),
+                    child: Column(
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(
+                              isEmCampo
+                                  ? Icons.timer_outlined
+                                  : (jaFezCheckout ? Icons.check_circle_outline : Icons.hourglass_empty_rounded),
+                              color: isEmCampo
+                                  ? const Color(0xFF1B6B45)
+                                  : (jaFezCheckout ? Colors.blue.shade800 : Colors.grey.shade600),
+                              size: 26,
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              jaFezCheckout
+                                  ? 'Tempo Total de Permanência'
+                                  : (isEmCampo ? 'Tempo em Campo (Decorrendo)' : 'Tempo no Campo'),
+                              style: TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.bold,
+                                color: isEmCampo
+                                    ? const Color(0xFF1B6B45)
+                                    : (jaFezCheckout ? Colors.blue.shade900 : Colors.grey.shade700),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          _calcularTempoEmCampo(jornada),
+                          style: TextStyle(
+                            fontSize: 26,
+                            fontWeight: FontWeight.w800,
+                            color: isEmCampo
+                                ? const Color(0xFF1B6B45)
+                                : (jaFezCheckout ? Colors.blue.shade900 : Colors.black87),
+                            letterSpacing: 0.5,
+                          ),
+                        ),
+                        if (isEmCampo) ...[
+                          const SizedBox(height: 6),
+                          const Text(
+                            'Cronômetro ativo desde a confirmação do seu check-in',
+                            style: TextStyle(fontSize: 12, color: Color(0xFF1B6B45)),
+                          ),
+                        ] else if (jaFezCheckout) ...[
+                          const SizedBox(height: 6),
+                          Text(
+                            'Entrada: ${_formatarHoraCurta(jornada.horaEntrada)} | Saída: ${_formatarHoraCurta(jornada.horaSaida)}',
+                            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Colors.blue.shade900),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+
+                const SizedBox(height: 16),
+
+                // 3. Card 1: Check-in (Entrada)
+                Card(
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                    side: BorderSide(
+                      color: jaFezCheckin ? Colors.green.shade400 : const Color(0xFF1B6B45).withValues(alpha: 0.4),
+                      width: 1.5,
+                    ),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.all(18.0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Row(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.all(8),
+                              decoration: BoxDecoration(
+                                color: (jaFezCheckin ? Colors.green : const Color(0xFF1B6B45)).withValues(alpha: 0.1),
+                                shape: BoxShape.circle,
+                              ),
+                              child: Icon(
+                                jaFezCheckin ? Icons.check_circle_rounded : Icons.login_rounded,
+                                color: jaFezCheckin ? Colors.green.shade700 : const Color(0xFF1B6B45),
+                                size: 24,
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            const Expanded(
+                              child: Text(
+                                '1. Check-in (Entrada)',
+                                style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                            Chip(
+                              visualDensity: VisualDensity.compact,
+                              label: Text(jaFezCheckin ? 'Realizado' : 'Pendente'),
+                              backgroundColor: jaFezCheckin ? Colors.green.shade50 : Colors.orange.shade50,
+                              labelStyle: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                color: jaFezCheckin ? Colors.green.shade800 : Colors.orange.shade800,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const Divider(height: 24),
+
+                        // Horário de Entrada
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                          decoration: BoxDecoration(
+                            color: jaFezCheckin ? Colors.green.shade50 : Colors.grey.shade100,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: jaFezCheckin ? Colors.green.shade200 : Colors.grey.shade300,
+                            ),
+                          ),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    jaFezCheckin ? 'Horário de Entrada Registrado:' : 'Horário de Entrada (no momento):',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w600,
+                                      color: jaFezCheckin ? Colors.green.shade900 : Colors.black54,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    jaFezCheckin
+                                        ? _formatarHora(jornada.horaEntrada)
+                                        : _formatarHora(_agora),
+                                    style: TextStyle(
+                                      fontSize: 22,
+                                      fontWeight: FontWeight.bold,
+                                      color: jaFezCheckin ? Colors.green.shade800 : const Color(0xFF1B6B45),
+                                      fontFamily: 'monospace',
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              Icon(
+                                Icons.access_time_rounded,
+                                color: jaFezCheckin ? Colors.green.shade700 : const Color(0xFF1B6B45),
+                                size: 32,
+                              ),
+                            ],
+                          ),
+                        ),
+
+                        if (!jaFezCheckin) ...[
+                          const SizedBox(height: 16),
+                          _buildGpsBoxCheckin(campoAtivo),
+                          const SizedBox(height: 16),
+                          FilledButton.icon(
+                            style: FilledButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(vertical: 16),
+                            ),
+                            onPressed: (_locationObtainedCheckin && _dentroDoRaioCheckin)
+                                ? () => _confirmarPresenca(campoAtivo)
+                                : null,
+                            icon: const Icon(Icons.login_rounded),
+                            label: const Text('CONFIRMAR CHECK-IN (ENTRADA)'),
+                          ),
+                        ] else ...[
+                          const SizedBox(height: 10),
+                          const Row(
+                            children: [
+                              Icon(Icons.verified_rounded, color: Colors.green, size: 16),
+                              SizedBox(width: 6),
+                              Text(
+                                'Entrada confirmada e validada no local de estágio',
+                                style: TextStyle(fontSize: 12, color: Colors.green),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+
+                const SizedBox(height: 16),
+
+                // 4. Card 2: Check-out (Saída) - Posicionado ABAIXO do Check-in
+                Card(
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                    side: BorderSide(
+                      color: jaFezCheckout
+                          ? Colors.green.shade400
+                          : (jaFezCheckin ? Colors.orange.shade400 : Colors.grey.shade300),
+                      width: 1.5,
+                    ),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.all(18.0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Row(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.all(8),
+                              decoration: BoxDecoration(
+                                color: (jaFezCheckout
+                                        ? Colors.green
+                                        : (jaFezCheckin ? Colors.orange : Colors.grey))
+                                    .withValues(alpha: 0.1),
+                                shape: BoxShape.circle,
+                              ),
+                              child: Icon(
+                                jaFezCheckout
+                                    ? Icons.check_circle_rounded
+                                    : (jaFezCheckin ? Icons.logout_rounded : Icons.lock_outline_rounded),
+                                color: jaFezCheckout
+                                    ? Colors.green.shade700
+                                    : (jaFezCheckin ? Colors.orange.shade800 : Colors.grey.shade600),
+                                size: 24,
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            const Expanded(
+                              child: Text(
+                                '2. Check-out (Saída)',
+                                style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                            Chip(
+                              visualDensity: VisualDensity.compact,
+                              label: Text(
+                                jaFezCheckout
+                                    ? 'Realizado'
+                                    : (jaFezCheckin ? 'Aguardando Saída' : 'Bloqueado'),
+                              ),
+                              backgroundColor: jaFezCheckout
+                                  ? Colors.green.shade50
+                                  : (jaFezCheckin ? Colors.orange.shade50 : Colors.grey.shade100),
+                              labelStyle: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                color: jaFezCheckout
+                                    ? Colors.green.shade800
+                                    : (jaFezCheckin ? Colors.orange.shade900 : Colors.grey.shade600),
+                                fontSize: 12,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const Divider(height: 24),
+
+                        if (!jaFezCheckin) ...[
+                          Container(
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              color: Colors.grey.shade100,
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: Colors.grey.shade300),
+                            ),
+                            child: const Row(
+                              children: [
+                                Icon(Icons.info_outline_rounded, color: Colors.grey, size: 24),
+                                SizedBox(width: 12),
+                                Expanded(
+                                  child: Text(
+                                    'O Check-out será liberado ao final do seu período após confirmar a entrada acima.',
+                                    style: TextStyle(color: Colors.black54, fontSize: 13),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ] else if (!jaFezCheckout) ...[
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                            decoration: BoxDecoration(
+                              color: Colors.orange.shade50,
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: Colors.orange.shade200),
+                            ),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const Text(
+                                      'Horário de Saída (no momento):',
+                                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.black54),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      _formatarHora(_agora),
+                                      style: TextStyle(
+                                        fontSize: 22,
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.orange.shade900,
+                                        fontFamily: 'monospace',
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                Icon(Icons.alarm_on_rounded, color: Colors.orange.shade800, size: 32),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          const Text(
+                            'Ao encerrar seu turno, valide a localização via GPS para registrar o horário oficial de término.',
+                            style: TextStyle(fontSize: 13, color: Colors.black87),
+                          ),
+                          const SizedBox(height: 16),
+                          _buildGpsBoxCheckout(campoAtivo),
+                          const SizedBox(height: 16),
+                          FilledButton.icon(
+                            style: FilledButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(vertical: 16),
+                              backgroundColor: Colors.orange.shade800,
+                            ),
+                            onPressed: (_locationObtainedCheckout && _dentroDoRaioCheckout)
+                                ? () => _confirmarCheckoutModal(
+                                      context,
+                                      jornada.frequenciaAtual?.id ?? '',
+                                      _formatarHora(jornada.horaEntrada),
+                                      jornada.horasEmCampo,
+                                    )
+                                : null,
+                            icon: const Icon(Icons.logout_rounded),
+                            label: const Text('CONFIRMAR CHECK-OUT (SAÍDA)'),
+                          ),
+                        ] else ...[
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                            decoration: BoxDecoration(
+                              color: Colors.green.shade50,
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: Colors.green.shade200),
+                            ),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'Horário de Saída Registrado:',
+                                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.green.shade900),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      _formatarHora(jornada.horaSaida),
+                                      style: TextStyle(
+                                        fontSize: 22,
+                                        fontWeight: FontWeight.bold,
+                                        color: Colors.green.shade800,
+                                        fontFamily: 'monospace',
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                Icon(Icons.check_circle_rounded, color: Colors.green.shade700, size: 32),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          const Row(
+                            children: [
+                              Icon(Icons.verified_rounded, color: Colors.green, size: 16),
+                              SizedBox(width: 6),
+                              Text(
+                                'Saída confirmada e validada no local de estágio',
+                                style: TextStyle(fontSize: 12, color: Colors.green),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+
+                if (jaFezCheckout) ...[
+                  const SizedBox(height: 20),
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: Colors.green.shade50,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.green.shade300),
+                    ),
+                    child: Column(
+                      children: [
+                        const Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.task_alt_rounded, color: Color(0xFF1B6B45), size: 28),
+                            SizedBox(width: 8),
+                            Text(
+                              'Jornada de hoje concluída!',
+                              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF1B6B45)),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          'Sua presença e saída foram registradas com sucesso para ${campoAtivo?.nome ?? 'o estágio'}.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: Colors.green.shade900, fontSize: 13),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+
+                const SizedBox(height: 24),
               ],
-            )
-          else if (_erroLocalizacao != null)
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.red.shade50,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.red.shade200),
-              ),
-              child: Column(
-                children: [
-                  const Icon(Icons.location_off, color: Colors.red, size: 48),
-                  const SizedBox(height: 8),
-                  const Text(
-                    'Falha ao obter localização de saída',
-                    style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(_erroLocalizacao!, textAlign: TextAlign.center),
-                  const SizedBox(height: 12),
-                  OutlinedButton.icon(
-                    onPressed: () => _obterLocalizacao(campo),
-                    icon: const Icon(Icons.refresh),
-                    label: const Text('Tentar Novamente'),
-                  ),
-                ],
-              ),
-            )
-          else if (_locationObtained && _dentroDoRaio)
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.green.shade50,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.green.shade300),
-              ),
-              child: Column(
-                children: [
-                  const Icon(Icons.check_circle_rounded, color: Colors.green, size: 56),
-                  const SizedBox(height: 8),
-                  const Text(
-                    'Localização de saída validada!',
-                    style: TextStyle(color: Colors.green, fontWeight: FontWeight.bold, fontSize: 16),
-                  ),
-                  const SizedBox(height: 4),
-                  const Text(
-                    'Você está no local do estágio. Saída liberada!',
-                    style: TextStyle(color: Colors.black54, fontSize: 13),
-                  ),
-                  const SizedBox(height: 8),
-                  TextButton.icon(
-                    onPressed: () => _obterLocalizacao(campo),
-                    icon: const Icon(Icons.refresh, size: 16),
-                    label: const Text('Atualizar GPS'),
-                  ),
-                ],
-              ),
-            )
-          else if (_locationObtained && !_dentroDoRaio)
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.red.shade50,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.red.shade300),
-              ),
-              child: Column(
-                children: [
-                  const Icon(Icons.wrong_location_rounded, color: Colors.red, size: 56),
-                  const SizedBox(height: 8),
-                  const Text(
-                    'Saída NÃO liberada: Fora do local de estágio',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold, fontSize: 16),
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    'Sua distância aproximada: ${_formatarDistancia(_distanciaMetros)}',
-                    style: const TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                  const SizedBox(height: 6),
-                  const Text(
-                    'Você precisa estar no local de estágio para registrar a saída.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: Colors.black87),
-                  ),
-                  const SizedBox(height: 12),
-                  FilledButton.tonalIcon(
-                    onPressed: () => _obterLocalizacao(campo),
-                    icon: const Icon(Icons.my_location),
-                    label: const Text('Atualizar Minha Localização'),
-                  ),
-                ],
-              ),
-            )
-          else
-            OutlinedButton.icon(
-              onPressed: () => _obterLocalizacao(campo),
-              icon: const Icon(Icons.my_location),
-              label: const Text('Obter Localização de Saída'),
             ),
-
-          const SizedBox(height: 24),
-
-          FilledButton.icon(
-            style: FilledButton.styleFrom(
-              padding: const EdgeInsets.symmetric(vertical: 16),
-            ),
-            onPressed: (_locationObtained && _dentroDoRaio)
-                ? () => _confirmarCheckoutModal(context, freq?.id ?? '', horaEntradaStr, horasEmCampo)
-                : null,
-            icon: const Icon(Icons.logout_rounded),
-            label: const Text('REGISTRAR SAÍDA', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-          ),
-        ],
+          );
+        },
+        loading: () => const Center(child: CircularProgressIndicator(semanticsLabel: 'Carregando...')),
+        error: (err, stack) => Center(child: Text('Erro: $err')),
       ),
     );
   }
 
-  Widget _buildCheckinStepper(BuildContext context, AsyncValue<List<CampoEstagio>> camposAsync) {
-    return Stepper(
-      currentStep: _currentStep,
-      onStepCancel: () {
-        if (_currentStep > 0) setState(() => _currentStep -= 1);
-      },
-      onStepContinue: () {
-        if (_currentStep == 0 && _selectedCampo != null && _selectedTurno != null) {
-          setState(() {
-            _currentStep += 1;
-          });
-          _obterLocalizacao(_selectedCampo);
-        } else if (_currentStep == 1) {
-          if (_dentroDoRaio) {
-            _confirmarPresenca();
-          } else {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('Presença bloqueada: Você deve estar no local do campo de estágio.'),
-                backgroundColor: Colors.red,
-              ),
-            );
-          }
-        }
-      },
-      controlsBuilder: (context, details) {
-        if (_currentStep == 0) {
-          return Padding(
-            padding: const EdgeInsets.only(top: 16.0),
-            child: FilledButton(
-              onPressed: (_selectedCampo != null && _selectedTurno != null) ? details.onStepContinue : null,
-              child: const Text('Iniciar Check-in'),
-            ),
-          );
-        } else {
-          return Padding(
-            padding: const EdgeInsets.only(top: 16.0),
-            child: Row(
-              children: [
-                Expanded(
-                  child: FilledButton(
-                    onPressed: (_locationObtained && _dentroDoRaio) ? details.onStepContinue : null,
-                    child: const Text('Confirmar Presença'),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                TextButton(
-                  onPressed: details.onStepCancel,
-                  child: const Text('Voltar'),
-                ),
-              ],
-            ),
-          );
-        }
-      },
-      steps: [
-        Step(
-          title: const Text('Selecionar Campo e Turno'),
-          isActive: _currentStep >= 0,
-          state: _currentStep > 0 ? StepState.complete : StepState.indexed,
-          content: camposAsync.when(
-            data: (campos) {
-              if (campos.isEmpty) return const Text('Nenhum campo de estágio ativo no momento.');
-              return Column(
-                children: [
-                  DropdownButtonFormField<CampoEstagio>(
-                    decoration: const InputDecoration(labelText: 'Campo de Estágio', border: OutlineInputBorder()),
-                    initialValue: _selectedCampo,
-                    items: campos.map((c) => DropdownMenuItem(value: c, child: Text(c.nome))).toList(),
-                    onChanged: (val) {
-                      setState(() {
-                        _selectedCampo = val;
-                        _locationObtained = false;
-                        _dentroDoRaio = false;
-                      });
-                    },
-                  ),
-                  const SizedBox(height: 16),
-                  DropdownButtonFormField<String>(
-                    decoration: const InputDecoration(labelText: 'Turno', border: OutlineInputBorder()),
-                    initialValue: _selectedTurno,
-                    items: ['Manhã', 'Tarde', 'Noite'].map((t) => DropdownMenuItem(value: t, child: Text(t))).toList(),
-                    onChanged: (val) => setState(() => _selectedTurno = val),
-                  ),
-                ],
-              );
-            },
-            loading: () => const CircularProgressIndicator(semanticsLabel: 'Carregando...'),
-            error: (err, stack) => Text('Erro: $err'),
-          ),
+  Widget _buildGpsBoxCheckin(CampoEstagio? campo) {
+    if (_isGettingLocationCheckin) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 16),
+        child: Column(
+          children: [
+            CircularProgressIndicator(semanticsLabel: 'Carregando GPS...'),
+            SizedBox(height: 12),
+            Text('Capturando GPS e validando presença no campo...', style: TextStyle(fontSize: 13, color: Colors.black87)),
+          ],
         ),
-        Step(
-          title: const Text('Check-in com GPS'),
-          isActive: _currentStep >= 1,
-          state: _currentStep == 1 ? StepState.editing : StepState.indexed,
-          content: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              if (_selectedCampo != null) ...[
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.grey.shade100,
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: Colors.grey.shade300),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(_selectedCampo!.nome, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                      const SizedBox(height: 4),
-                      Text('Turno: $_selectedTurno'),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 16),
-              ],
-              
-              if (_isGettingLocation)
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: 24),
-                  child: Column(
-                    children: [
-                      CircularProgressIndicator(semanticsLabel: 'Carregando...'),
-                      SizedBox(height: 16),
-                      Text('Consultando satélites e verificando sua distância do campo...'),
-                    ],
-                  ),
-                )
-              else if (_erroLocalizacao != null)
-                Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: Colors.red.shade50,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Colors.red.shade200),
-                  ),
-                  child: Column(
-                    children: [
-                      const Icon(Icons.location_off, color: Colors.red, size: 48),
-                      const SizedBox(height: 8),
-                      const Text(
-                        'Falha ao obter localização',
-                        style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold, fontSize: 16),
-                      ),
-                      const SizedBox(height: 6),
-                      Text(_erroLocalizacao!, textAlign: TextAlign.center),
-                      const SizedBox(height: 16),
-                      OutlinedButton.icon(
-                        onPressed: () => _obterLocalizacao(_selectedCampo),
-                        icon: const Icon(Icons.refresh),
-                        label: const Text('Tentar Novamente'),
-                      ),
-                    ],
-                  ),
-                )
-              else if (_locationObtained && _dentroDoRaio)
-                Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: Colors.green.shade50,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Colors.green.shade300),
-                  ),
-                  child: Column(
-                    children: [
-                      const Icon(Icons.check_circle_rounded, color: Colors.green, size: 56),
-                      const SizedBox(height: 12),
-                      const Text(
-                        'Localização validada com sucesso!',
-                        style: TextStyle(color: Colors.green, fontWeight: FontWeight.bold, fontSize: 16),
-                      ),
-                      const SizedBox(height: 6),
-                      const Text(
-                        'Você está no local do estágio. Presença liberada!',
-                        style: TextStyle(fontWeight: FontWeight.w600),
-                      ),
-                      if (_lat != null && _lng != null) ...[
-                        const SizedBox(height: 6),
-                        Text(
-                          'GPS: ${_lat!.toStringAsFixed(5)}, ${_lng!.toStringAsFixed(5)} (±${_precisaoGps?.toStringAsFixed(0) ?? 0}m)',
-                          style: const TextStyle(fontSize: 11, color: Colors.black45),
-                        ),
-                      ],
-                      const SizedBox(height: 12),
-                      TextButton.icon(
-                        onPressed: () => _obterLocalizacao(_selectedCampo),
-                        icon: const Icon(Icons.refresh, size: 16),
-                        label: const Text('Atualizar GPS'),
-                      ),
-                    ],
-                  ),
-                )
-              else if (_locationObtained && !_dentroDoRaio)
-                Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: Colors.red.shade50,
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Colors.red.shade300),
-                  ),
-                  child: Column(
-                    children: [
-                      const Icon(Icons.wrong_location_rounded, color: Colors.red, size: 56),
-                      const SizedBox(height: 12),
-                      const Text(
-                        'Presença NÃO liberada: Fora do local de estágio',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold, fontSize: 16),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Sua distância aproximada: ${_formatarDistancia(_distanciaMetros)}',
-                        style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
-                      ),
-                      const SizedBox(height: 6),
-                      const Text(
-                        'Para registrar presença, você deve estar fisicamente presente no campo de estágio.',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(color: Colors.black87),
-                      ),
-                      if (_lat != null && _lng != null) ...[
-                        const SizedBox(height: 6),
-                        Text(
-                          'Sua coordenada: ${_lat!.toStringAsFixed(5)}, ${_lng!.toStringAsFixed(5)}',
-                          style: const TextStyle(fontSize: 11, color: Colors.black45),
-                        ),
-                      ],
-                      const SizedBox(height: 16),
-                      FilledButton.tonalIcon(
-                        onPressed: () => _obterLocalizacao(_selectedCampo),
-                        icon: const Icon(Icons.my_location),
-                        label: const Text('Atualizar Minha Localização'),
-                      ),
-                    ],
-                  ),
-                ),
-            ],
-          ),
+      );
+    }
+
+    if (_erroLocalizacaoCheckin != null) {
+      return Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.red.shade50,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.red.shade200),
         ),
-      ],
+        child: Column(
+          children: [
+            const Icon(Icons.location_off, color: Colors.red, size: 44),
+            const SizedBox(height: 8),
+            const Text(
+              'Falha ao obter localização',
+              style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold, fontSize: 15),
+            ),
+            const SizedBox(height: 6),
+            Text(_erroLocalizacaoCheckin!, textAlign: TextAlign.center, style: const TextStyle(fontSize: 13)),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: () => _obterLocalizacaoCheckin(campo),
+              icon: const Icon(Icons.refresh),
+              label: const Text('Tentar Novamente'),
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (_locationObtainedCheckin && _dentroDoRaioCheckin) {
+      return Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.green.shade50,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.green.shade300),
+        ),
+        child: Column(
+          children: [
+            const Icon(Icons.check_circle_rounded, color: Colors.green, size: 48),
+            const SizedBox(height: 8),
+            const Text(
+              'Localização validada com sucesso!',
+              style: TextStyle(color: Colors.green, fontWeight: FontWeight.bold, fontSize: 15),
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              'Você está no local do estágio. Presença liberada!',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+            ),
+            const SizedBox(height: 8),
+            TextButton.icon(
+              onPressed: () => _obterLocalizacaoCheckin(campo),
+              icon: const Icon(Icons.refresh, size: 16),
+              label: const Text('Atualizar GPS'),
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (_locationObtainedCheckin && !_dentroDoRaioCheckin) {
+      return Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.red.shade50,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.red.shade300),
+        ),
+        child: Column(
+          children: [
+            const Icon(Icons.wrong_location_rounded, color: Colors.red, size: 48),
+            const SizedBox(height: 8),
+            const Text(
+              'Presença NÃO liberada: Fora do local de estágio',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold, fontSize: 15),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Sua distância aproximada: ${_formatarDistancia(_distanciaMetrosCheckin)}',
+              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              'Para registrar presença, você deve estar fisicamente presente no campo de estágio.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.black87, fontSize: 12),
+            ),
+            const SizedBox(height: 12),
+            FilledButton.tonalIcon(
+              onPressed: () => _obterLocalizacaoCheckin(campo),
+              icon: const Icon(Icons.my_location),
+              label: const Text('Atualizar Minha Localização'),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return OutlinedButton.icon(
+      style: OutlinedButton.styleFrom(
+        padding: const EdgeInsets.symmetric(vertical: 14),
+      ),
+      onPressed: () => _obterLocalizacaoCheckin(campo),
+      icon: const Icon(Icons.my_location),
+      label: const Text('Validar Localização via GPS'),
     );
   }
 
-  Future<void> _obterLocalizacao([CampoEstagio? campoAlvo]) async {
-    setState(() {
-      _isGettingLocation = true;
-      _locationObtained = false;
-      _erroLocalizacao = null;
-    });
+  Widget _buildGpsBoxCheckout(CampoEstagio? campo) {
+    if (_isGettingLocationCheckout) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 16),
+        child: Column(
+          children: [
+            CircularProgressIndicator(semanticsLabel: 'Carregando GPS...'),
+            SizedBox(height: 12),
+            Text('Capturando GPS e validando saída no campo...', style: TextStyle(fontSize: 13, color: Colors.black87)),
+          ],
+        ),
+      );
+    }
 
-    final campo = campoAlvo ?? _selectedCampo ?? _obterCampoParaValidacao(ref.read(frequenciaHojeProvider).valueOrNull);
+    if (_erroLocalizacaoCheckout != null) {
+      return Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.red.shade50,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.red.shade200),
+        ),
+        child: Column(
+          children: [
+            const Icon(Icons.location_off, color: Colors.red, size: 44),
+            const SizedBox(height: 8),
+            const Text(
+              'Falha ao obter localização de saída',
+              style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold, fontSize: 15),
+            ),
+            const SizedBox(height: 6),
+            Text(_erroLocalizacaoCheckout!, textAlign: TextAlign.center, style: const TextStyle(fontSize: 13)),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: () => _obterLocalizacaoCheckout(campo),
+              icon: const Icon(Icons.refresh),
+              label: const Text('Tentar Novamente'),
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (_locationObtainedCheckout && _dentroDoRaioCheckout) {
+      return Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.green.shade50,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.green.shade300),
+        ),
+        child: Column(
+          children: [
+            const Icon(Icons.check_circle_rounded, color: Colors.green, size: 48),
+            const SizedBox(height: 8),
+            const Text(
+              'Localização de saída validada!',
+              style: TextStyle(color: Colors.green, fontWeight: FontWeight.bold, fontSize: 15),
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              'Você está no local do estágio. Saída liberada!',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+            ),
+            const SizedBox(height: 8),
+            TextButton.icon(
+              onPressed: () => _obterLocalizacaoCheckout(campo),
+              icon: const Icon(Icons.refresh, size: 16),
+              label: const Text('Atualizar GPS'),
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (_locationObtainedCheckout && !_dentroDoRaioCheckout) {
+      return Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.red.shade50,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.red.shade300),
+        ),
+        child: Column(
+          children: [
+            const Icon(Icons.wrong_location_rounded, color: Colors.red, size: 48),
+            const SizedBox(height: 8),
+            const Text(
+              'Saída NÃO liberada: Fora do local de estágio',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold, fontSize: 15),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Sua distância aproximada: ${_formatarDistancia(_distanciaMetrosCheckout)}',
+              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              'Para registrar a saída, você deve estar fisicamente presente no campo de estágio.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.black87, fontSize: 12),
+            ),
+            const SizedBox(height: 12),
+            FilledButton.tonalIcon(
+              onPressed: () => _obterLocalizacaoCheckout(campo),
+              icon: const Icon(Icons.my_location),
+              label: const Text('Atualizar Minha Localização'),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return OutlinedButton.icon(
+      style: OutlinedButton.styleFrom(
+        padding: const EdgeInsets.symmetric(vertical: 14),
+      ),
+      onPressed: () => _obterLocalizacaoCheckout(campo),
+      icon: const Icon(Icons.my_location),
+      label: const Text('Validar Localização de Saída via GPS'),
+    );
+  }
+
+  Future<void> _obterLocalizacaoCheckin(CampoEstagio? campo) async {
     if (campo == null) {
       setState(() {
-        _isGettingLocation = false;
-        _erroLocalizacao = 'Selecione um campo de estágio para validar a localização.';
+        _erroLocalizacaoCheckin = 'Selecione um campo de estágio para validar a localização.';
       });
       return;
     }
+
+    setState(() {
+      _isGettingLocationCheckin = true;
+      _locationObtainedCheckin = false;
+      _erroLocalizacaoCheckin = null;
+    });
 
     try {
       bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
       if (!serviceEnabled) {
         if (!mounted) return;
         setState(() {
-          _isGettingLocation = false;
-          _dentroDoRaio = false;
-          _erroLocalizacao = 'O serviço de localização (GPS) está desativado. Ative a localização no seu dispositivo ou navegador para continuar.';
+          _isGettingLocationCheckin = false;
+          _dentroDoRaioCheckin = false;
+          _erroLocalizacaoCheckin = 'O serviço de localização (GPS) está desativado. Ative a localização no seu dispositivo ou navegador para continuar.';
         });
         return;
       }
@@ -553,9 +971,9 @@ class _RegistrarPresencaScreenState extends ConsumerState<RegistrarPresencaScree
         if (permission == LocationPermission.denied) {
           if (!mounted) return;
           setState(() {
-            _isGettingLocation = false;
-            _dentroDoRaio = false;
-            _erroLocalizacao = 'Permissão de GPS negada. É obrigatório autorizar a localização para validar a presença no campo de estágio.';
+            _isGettingLocationCheckin = false;
+            _dentroDoRaioCheckin = false;
+            _erroLocalizacaoCheckin = 'Permissão de GPS negada. É obrigatório autorizar a localização para validar a presença no campo de estágio.';
           });
           return;
         }
@@ -564,9 +982,9 @@ class _RegistrarPresencaScreenState extends ConsumerState<RegistrarPresencaScree
       if (permission == LocationPermission.deniedForever) {
         if (!mounted) return;
         setState(() {
-          _isGettingLocation = false;
-          _dentroDoRaio = false;
-          _erroLocalizacao = 'A permissão de GPS está bloqueada permanentemente. Por favor, libere a permissão de localização nas configurações do seu navegador ou dispositivo.';
+          _isGettingLocationCheckin = false;
+          _dentroDoRaioCheckin = false;
+          _erroLocalizacaoCheckin = 'A permissão de GPS está bloqueada permanentemente. Por favor, libere a permissão de localização nas configurações do seu navegador ou dispositivo.';
         });
         return;
       }
@@ -589,27 +1007,114 @@ class _RegistrarPresencaScreenState extends ConsumerState<RegistrarPresencaScree
 
       if (!mounted) return;
       setState(() {
-        _isGettingLocation = false;
-        _locationObtained = true;
-        _lat = position.latitude;
-        _lng = position.longitude;
-        _precisaoGps = position.accuracy;
-        _distanciaMetros = dist;
-        _dentroDoRaio = dentro;
-        _erroLocalizacao = null;
+        _isGettingLocationCheckin = false;
+        _locationObtainedCheckin = true;
+        _latCheckin = position.latitude;
+        _lngCheckin = position.longitude;
+        _precisaoGpsCheckin = position.accuracy;
+        _distanciaMetrosCheckin = dist;
+        _dentroDoRaioCheckin = dentro;
+        _erroLocalizacaoCheckin = null;
       });
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _isGettingLocation = false;
-        _dentroDoRaio = false;
-        _erroLocalizacao = 'Erro ao capturar GPS do dispositivo: $e';
+        _isGettingLocationCheckin = false;
+        _dentroDoRaioCheckin = false;
+        _erroLocalizacaoCheckin = 'Erro ao capturar GPS do dispositivo: $e';
       });
     }
   }
 
-  void _confirmarPresenca() {
-    if (!_dentroDoRaio || _lat == null || _lng == null) {
+  Future<void> _obterLocalizacaoCheckout(CampoEstagio? campo) async {
+    if (campo == null) {
+      setState(() {
+        _erroLocalizacaoCheckout = 'Campo de estágio não identificado para validar a saída.';
+      });
+      return;
+    }
+
+    setState(() {
+      _isGettingLocationCheckout = true;
+      _locationObtainedCheckout = false;
+      _erroLocalizacaoCheckout = null;
+    });
+
+    try {
+      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        if (!mounted) return;
+        setState(() {
+          _isGettingLocationCheckout = false;
+          _dentroDoRaioCheckout = false;
+          _erroLocalizacaoCheckout = 'O serviço de localização (GPS) está desativado. Ative a localização no seu dispositivo ou navegador para continuar.';
+        });
+        return;
+      }
+
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+        if (permission == LocationPermission.denied) {
+          if (!mounted) return;
+          setState(() {
+            _isGettingLocationCheckout = false;
+            _dentroDoRaioCheckout = false;
+            _erroLocalizacaoCheckout = 'Permissão de GPS negada. É obrigatório autorizar a localização para validar a saída no campo de estágio.';
+          });
+          return;
+        }
+      }
+
+      if (permission == LocationPermission.deniedForever) {
+        if (!mounted) return;
+        setState(() {
+          _isGettingLocationCheckout = false;
+          _dentroDoRaioCheckout = false;
+          _erroLocalizacaoCheckout = 'A permissão de GPS está bloqueada permanentemente. Por favor, libere a permissão de localização nas configurações do seu navegador ou dispositivo.';
+        });
+        return;
+      }
+
+      final position = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          timeLimit: Duration(seconds: 15),
+        ),
+      );
+
+      final dist = Geolocator.distanceBetween(
+        position.latitude,
+        position.longitude,
+        campo.lat,
+        campo.lng,
+      );
+
+      final dentro = dist <= campo.raioMetros;
+
+      if (!mounted) return;
+      setState(() {
+        _isGettingLocationCheckout = false;
+        _locationObtainedCheckout = true;
+        _latCheckout = position.latitude;
+        _lngCheckout = position.longitude;
+        _precisaoGpsCheckout = position.accuracy;
+        _distanciaMetrosCheckout = dist;
+        _dentroDoRaioCheckout = dentro;
+        _erroLocalizacaoCheckout = null;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isGettingLocationCheckout = false;
+        _dentroDoRaioCheckout = false;
+        _erroLocalizacaoCheckout = 'Erro ao capturar GPS do dispositivo: $e';
+      });
+    }
+  }
+
+  void _confirmarPresenca(CampoEstagio? campo) {
+    if (!_dentroDoRaioCheckin || _latCheckin == null || _lngCheckin == null) {
       showDialog(
         context: context,
         builder: (ctx) => AlertDialog(
@@ -622,7 +1127,7 @@ class _RegistrarPresencaScreenState extends ConsumerState<RegistrarPresencaScree
             ],
           ),
           content: Text(
-            'Você está fora do perímetro do campo de estágio (${_formatarDistancia(_distanciaMetros)} de distância).\n\n'
+            'Você está fora do perímetro do campo de estágio (${_formatarDistancia(_distanciaMetrosCheckin)} de distância).\n\n'
             'Para liberar a presença, você deve estar fisicamente presente no local do estágio.',
           ),
           actions: [
@@ -636,19 +1141,20 @@ class _RegistrarPresencaScreenState extends ConsumerState<RegistrarPresencaScree
       return;
     }
 
+    final horaAtualStr = _formatarHora(_agora);
     ConfirmationBottomSheet.show(
       context,
       title: 'Confirmar Check-in?',
-      message: 'Local: ${_selectedCampo?.nome}\nTurno: $_selectedTurno\nDistância: ${_formatarDistancia(_distanciaMetros)}\nHorário: ${TimeOfDay.now().format(context)}',
-      confirmText: 'CONFIRMAR',
+      message: 'Local: ${campo?.nome ?? _selectedCampo?.nome}\nTurno: $_selectedTurno\nHorário de Entrada: $horaAtualStr',
+      confirmText: 'CONFIRMAR ENTRADA',
       onConfirm: () {
-        _executarRegistroBanco();
+        _executarRegistroBanco(campo);
       },
     );
   }
 
-  void _confirmarCheckoutModal(BuildContext context, String frequenciaId, String horaEntrada, double horasTrabalhadas) {
-    if (!_dentroDoRaio || _lat == null || _lng == null) {
+  void _confirmarCheckoutModal(BuildContext context, String frequenciaId, String horaEntradaStr, double horasTrabalhadas) {
+    if (!_dentroDoRaioCheckout || _latCheckout == null || _lngCheckout == null) {
       showDialog(
         context: context,
         builder: (ctx) => AlertDialog(
@@ -661,8 +1167,8 @@ class _RegistrarPresencaScreenState extends ConsumerState<RegistrarPresencaScree
             ],
           ),
           content: Text(
-            'Você está fora do perímetro do campo de estágio (${_formatarDistancia(_distanciaMetros)} de distância).\n\n'
-            'Para registrar a saída, você deve estar fisicamente no local do estágio.',
+            'Você está fora do perímetro do campo de estágio (${_formatarDistancia(_distanciaMetrosCheckout)} de distância).\n\n'
+            'Para registrar a saída, você deve estar fisicamente presente no local do estágio.',
           ),
           actions: [
             TextButton(
@@ -675,39 +1181,34 @@ class _RegistrarPresencaScreenState extends ConsumerState<RegistrarPresencaScree
       return;
     }
 
-    final horaSaidaStr = TimeOfDay.now().format(context);
-    final hCalc = horasTrabalhadas.toStringAsFixed(1);
+    final horaSaidaStr = _formatarHora(_agora);
     final messenger = ScaffoldMessenger.of(context);
-    final router = GoRouter.of(context);
 
     ConfirmationBottomSheet.show(
       context,
-      title: 'Confirmar Registar Saída?',
-      message: 'Confirmar saída às $horaSaidaStr?\nDistância: ${_formatarDistancia(_distanciaMetros)}\nHoras trabalhadas hoje: ${hCalc}h',
+      title: 'Confirmar Check-out de Saída?',
+      message: 'Confirmar saída às $horaSaidaStr?\nEntrada registrada: $horaEntradaStr',
       confirmText: 'CONFIRMAR SAÍDA',
       onConfirm: () async {
         try {
           await ref.read(historicoAlunoProvider.notifier).registrarCheckout(
             frequenciaId: frequenciaId,
-            latSaida: _lat,
-            lngSaida: _lng,
+            latSaida: _latCheckout,
+            lngSaida: _lngCheckout,
             gpsSaidaDisponivel: true,
-            distanciaSaidaMetros: _distanciaMetros,
-            precisaoSaidaMetros: _precisaoGps,
+            distanciaSaidaMetros: _distanciaMetrosCheckout,
+            precisaoSaidaMetros: _precisaoGpsCheckout,
           );
           if (mounted) {
             ref.invalidate(frequenciaHojeProvider);
-            final estadoAtualizado = await ref.read(frequenciaHojeProvider.future);
-            final horasOficiais = estadoAtualizado.frequenciaAtual?.horasTrabalhadas ?? horasTrabalhadas;
-            final hOficialStr = horasOficiais.toStringAsFixed(1);
+            ref.read(historicoAlunoProvider.notifier).loadHistoricoAluno();
 
             messenger.showSnackBar(
               SnackBar(
-                content: Text('Saída registrada às $horaSaidaStr com sucesso! Total: ${hOficialStr}h'),
+                content: Text('Saída registrada com sucesso às $horaSaidaStr!'),
                 backgroundColor: const Color(0xFF1B6B45),
               ),
             );
-            router.go('/aluno/home');
           }
         } catch (e) {
           if (mounted) {
@@ -723,24 +1224,24 @@ class _RegistrarPresencaScreenState extends ConsumerState<RegistrarPresencaScree
             if (context.mounted) {
               await showDialog(
                 context: context,
-              builder: (ctx) => AlertDialog(
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                title: const Row(
-                  children: [
-                    Icon(Icons.error_outline_rounded, color: Colors.red),
-                    SizedBox(width: 10),
-                    Text('Atenção no Check-out'),
+                builder: (ctx) => AlertDialog(
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                  title: const Row(
+                    children: [
+                      Icon(Icons.error_outline_rounded, color: Colors.red),
+                      SizedBox(width: 10),
+                      Text('Atenção no Check-out'),
+                    ],
+                  ),
+                  content: Text(msgAmigavel),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(ctx),
+                      child: const Text('Entendido'),
+                    ),
                   ],
                 ),
-                content: Text(msgAmigavel),
-                actions: [
-                  TextButton(
-                    onPressed: () => Navigator.pop(ctx),
-                    child: const Text('Entendido'),
-                  ),
-                ],
-              ),
-            );
+              );
             }
           }
         }
@@ -748,7 +1249,7 @@ class _RegistrarPresencaScreenState extends ConsumerState<RegistrarPresencaScree
     );
   }
 
-  Future<void> _executarRegistroBanco() async {
+  Future<void> _executarRegistroBanco(CampoEstagio? campoAlvo) async {
     try {
       if (!mounted) return;
       final supabase = ref.read(supabaseClientProvider);
@@ -764,14 +1265,14 @@ class _RegistrarPresencaScreenState extends ConsumerState<RegistrarPresencaScree
         throw Exception('Usuário não autenticado no Supabase.');
       }
 
-      final campo = _selectedCampo;
+      final campo = campoAlvo ?? _selectedCampo;
       if (campo == null) {
         throw Exception('Selecione um campo de estágio.');
       }
 
-      if (!_dentroDoRaio || _lat == null || _lng == null) {
+      if (!_dentroDoRaioCheckin || _latCheckin == null || _lngCheckin == null) {
         throw Exception(
-          'Presença não liberada: Você está fora do local de estágio (${_formatarDistancia(_distanciaMetros)} de distância).',
+          'Presença não liberada: Você está fora do local de estágio (${_formatarDistancia(_distanciaMetrosCheckin)} de distância).',
         );
       }
 
@@ -812,7 +1313,7 @@ class _RegistrarPresencaScreenState extends ConsumerState<RegistrarPresencaScree
         }
       } catch (_) {}
 
-      // 2. Se não houver alocação ativa para este campo + turno, garante turno e alocação via sessão administrativa
+      // 2. Se não houver alocação ativa para este campo + turno, garante via sessão de fallback
       if (alocacaoId == null || turnoId == null) {
         final isolated = SupabaseClient(
           supabaseUrl,
@@ -826,7 +1327,6 @@ class _RegistrarPresencaScreenState extends ConsumerState<RegistrarPresencaScree
           );
           final coordId = isolated.auth.currentUser?.id ?? 'a4000000-0000-0000-0000-000000000004';
 
-          // Encerra vigência de alocações em outros campos para respeitar a regra de campo único ativo
           await isolated
               .from('alocacoes_alunos')
               .update({'data_fim': ontemStr})
@@ -834,7 +1334,6 @@ class _RegistrarPresencaScreenState extends ConsumerState<RegistrarPresencaScree
               .neq('campo_id', campo.id)
               .isFilter('deleted_at', null);
 
-          // Garante que alocações existentes neste campo estejam com data_fim = null
           await isolated
               .from('alocacoes_alunos')
               .update({'data_fim': null})
@@ -842,7 +1341,6 @@ class _RegistrarPresencaScreenState extends ConsumerState<RegistrarPresencaScree
               .eq('campo_id', campo.id)
               .isFilter('deleted_at', null);
 
-          // Busca ou cria o turno correspondente neste campo
           final turnosExistentes = await isolated
               .from('turnos')
               .select('id, tipo')
@@ -903,8 +1401,8 @@ class _RegistrarPresencaScreenState extends ConsumerState<RegistrarPresencaScree
         throw Exception('Não foi possível vincular a alocação para o campo selecionado.');
       }
 
-      final latEnvio = _lat!;
-      final lngEnvio = _lng!;
+      final latEnvio = _latCheckin!;
+      final lngEnvio = _lngCheckin!;
       final nowIso = DateTime.now().toUtc().toIso8601String();
 
       try {
@@ -919,8 +1417,8 @@ class _RegistrarPresencaScreenState extends ConsumerState<RegistrarPresencaScree
           'lat_registro': latEnvio,
           'lng_registro': lngEnvio,
           'gps_disponivel': true,
-          'distancia_metros': _distanciaMetros,
-          'gps_precisao_metros': _precisaoGps,
+          'distancia_metros': _distanciaMetrosCheckin,
+          'gps_precisao_metros': _precisaoGpsCheckin,
           'created_by': userId,
         });
       } catch (insertErr) {
@@ -946,8 +1444,8 @@ class _RegistrarPresencaScreenState extends ConsumerState<RegistrarPresencaScree
                   'lat_registro': latEnvio,
                   'lng_registro': lngEnvio,
                   'gps_disponivel': true,
-                  'distancia_metros': _distanciaMetros,
-                  'gps_precisao_metros': _precisaoGps,
+                  'distancia_metros': _distanciaMetrosCheckin,
+                  'gps_precisao_metros': _precisaoGpsCheckin,
                   'lat_saida': null,
                   'lng_saida': null,
                   'timestamp_saida_cliente': null,
@@ -969,12 +1467,11 @@ class _RegistrarPresencaScreenState extends ConsumerState<RegistrarPresencaScree
       ref.invalidate(frequenciaHojeProvider);
       ref.read(historicoAlunoProvider.notifier).loadHistoricoAluno();
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Presença registrada com sucesso!'),
-          backgroundColor: Color(0xFF1B6B45),
+        SnackBar(
+          content: Text('Presença registrada com sucesso às ${_formatarHora(_agora)}!'),
+          backgroundColor: const Color(0xFF1B6B45),
         ),
       );
-      context.go('/aluno/home');
     } catch (e) {
       if (!mounted) return;
       final msg = e.toString();
