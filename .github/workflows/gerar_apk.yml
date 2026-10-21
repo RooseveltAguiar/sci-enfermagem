@@ -1,15 +1,47 @@
-name: Gerar APK Android (SCI Enfermagem)
+name: Build APK Android e Publicar Web (SCI Enfermagem)
 
 on:
   push:
     branches: [ main, master ]
   workflow_dispatch:
 
-jobs:
-  build-apk:
-    name: Compilar APK Release
-    runs-on: ubuntu-latest
+permissions:
+  contents: write
+  pages: write
+  id-token: write
 
+jobs:
+  build-web:
+    name: Compilar e Publicar Versão Web (GitHub Pages)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Baixar código do repositório
+        uses: actions/checkout@v4
+
+      - name: Configurar Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Compilar Flutter Web
+        run: |
+          cd sci_app
+          flutter pub get
+          flutter build web --release --base-href "/sci-enfermagem/"
+          cp build/web/index.html build/web/404.html
+          touch build/web/.nojekyll
+
+      - name: Publicar na branch gh-pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./sci_app/build/web
+          force_orphan: true
+
+  build-apk:
+    name: Compilar APK Release Android
+    runs-on: ubuntu-latest
     steps:
       - name: Baixar código do repositório
         uses: actions/checkout@v4
@@ -33,12 +65,24 @@ jobs:
           fi
           flutter pub get
           flutter build apk --release
+          cp build/app/outputs/flutter-apk/app-release.apk build/app/outputs/flutter-apk/SCI-Enfermagem.apk
 
-      - name: Disponibilizar APK para Download (SCI-Enfermagem-APK)
+      - name: Disponibilizar APK nos Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: SCI-Enfermagem-APK
           path: |
+            sci_app/build/app/outputs/flutter-apk/SCI-Enfermagem.apk
             sci_app/build/app/outputs/flutter-apk/app-release.apk
-            build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
+
+      - name: Publicar APK na aba Releases (Download Direto)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0-mobile
+          name: "SCI Enfermagem - Versão Mobile Android (APK)"
+          body: "Clique em **SCI-Enfermagem.apk** abaixo para baixar e instalar diretamente no celular Android."
+          files: |
+            sci_app/build/app/outputs/flutter-apk/SCI-Enfermagem.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
