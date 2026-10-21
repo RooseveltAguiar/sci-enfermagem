@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:math';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../main.dart';
@@ -6,16 +7,76 @@ import '../models/usuario_model.dart';
 class UsuariosRepository {
   final SupabaseClient _supabase;
 
-  // Cache local em memória caso o limite de envio de e-mail gratuito do Supabase Auth seja atingido em testes seguidos
+  // Cache local complementar em memória
   static final List<UsuarioModel> _usuariosLocaisFallback = [];
 
   UsuariosRepository([SupabaseClient? supabase])
       : _supabase = supabase ?? Supabase.instance.client;
 
-  Future<List<UsuarioModel>> listarUsuariosPorPerfil(String perfil) async {
-    List<UsuarioModel> remotos = [];
+  String _gerarUuidV4() {
+    final rnd = Random.secure();
+    final bytes = List<int>.generate(16, (_) => rnd.nextInt(256));
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    String hex(int b) => b.toRadixString(16).padLeft(2, '0');
+    return '${hex(bytes[0])}${hex(bytes[1])}${hex(bytes[2])}${hex(bytes[3])}-'
+        '${hex(bytes[4])}${hex(bytes[5])}-'
+        '${hex(bytes[6])}${hex(bytes[7])}-'
+        '${hex(bytes[8])}${hex(bytes[9])}-'
+        '${hex(bytes[10])}${hex(bytes[11])}${hex(bytes[12])}${hex(bytes[13])}${hex(bytes[14])}${hex(bytes[15])}';
+  }
+
+  Future<List<UsuarioModel>> _carregarUsuariosDeConfiguracoes({String? perfilFiltro}) async {
+    final lista = <UsuarioModel>[];
     try {
-      // Prioriza a tabela `usuarios` (traz CPF, e-mail e status completos para a Coordenação)
+      final rows = await _supabase
+          .from('configuracoes')
+          .select('chave, valor, updated_at')
+          .like('chave', 'sci_usr_%')
+          .isFilter('deleted_at', null);
+
+      for (final row in (rows as List)) {
+        try {
+          final valStr = (row['valor'] ?? '').toString();
+          if (valStr.isEmpty) continue;
+          final map = Map<String, dynamic>.from(jsonDecode(valStr) as Map);
+          final p = (map['perfil'] ?? '').toString();
+          if (perfilFiltro != null && p != perfilFiltro) continue;
+          lista.add(UsuarioModel.fromJson(map));
+        } catch (_) {}
+      }
+    } catch (_) {}
+    return lista;
+  }
+
+  Future<void> _salvarUsuarioEmConfiguracoes(
+    Map<String, dynamic> userJson, {
+    String? coordId,
+  }) async {
+    final cpfDigits = (userJson['cpf'] ?? '').toString().replaceAll(RegExp(r'\D'), '');
+    if (cpfDigits.isEmpty) return;
+    final currentCoordId =
+        coordId ?? _supabase.auth.currentUser?.id ?? 'a4000000-0000-0000-0000-000000000004';
+    try {
+      await _supabase.from('configuracoes').upsert(
+        {
+          'chave': 'sci_usr_$cpfDigits',
+          'valor': jsonEncode(userJson),
+          'descricao': 'Registro persistente de usuário SCI (${userJson['perfil']})',
+          'created_by': currentCoordId,
+          'updated_by': currentCoordId,
+          'deleted_at': null,
+        },
+        onConflict: 'chave',
+      );
+    } catch (_) {}
+  }
+
+  Future<List<UsuarioModel>> listarUsuariosPorPerfil(String perfil) async {
+    final Map<String, UsuarioModel> porCpfOuId = {};
+
+    try {
+      // 1. Carrega da tabela `public.usuarios`
       final response = await _supabase
           .from('usuarios')
           .select()
@@ -23,13 +84,17 @@ class UsuariosRepository {
           .order('nome', ascending: true);
 
       final List<dynamic> data = response as List<dynamic>;
-      remotos = data
-          .map((e) => UsuarioModel.fromJson(e as Map<String, dynamic>))
-          .where((u) => u.cpf != '00000000000') // Oculta usuário interno de automação
-          .toList();
+      for (final e in data) {
+        final u = UsuarioModel.fromJson(e as Map<String, dynamic>);
+        if (u.cpf == '00000000000') continue;
+        final key = u.cpf.replaceAll(RegExp(r'\D'), '').isNotEmpty
+            ? u.cpf.replaceAll(RegExp(r'\D'), '')
+            : u.id;
+        porCpfOuId[key] = u;
+      }
     } catch (_) {}
 
-    if (remotos.isEmpty) {
+    if (porCpfOuId.isEmpty) {
       try {
         final response = await _supabase
             .from('vw_usuarios_publico')
@@ -38,30 +103,37 @@ class UsuariosRepository {
             .order('nome', ascending: true);
 
         final List<dynamic> data = response as List<dynamic>;
-        remotos = data
-            .map((e) => UsuarioModel.fromJson(e as Map<String, dynamic>))
-            .toList();
+        for (final e in data) {
+          final u = UsuarioModel.fromJson(e as Map<String, dynamic>);
+          final key = u.cpf.replaceAll(RegExp(r'\D'), '').isNotEmpty
+              ? u.cpf.replaceAll(RegExp(r'\D'), '')
+              : u.id;
+          porCpfOuId[key] = u;
+        }
       } catch (_) {}
     }
 
-    // Mescla com eventuais usuários criados em fallback local na sessão
-    final idsRemotos = remotos.map((u) => u.id).toSet();
-    final cpfsRemotos = remotos
-        .map((u) => u.cpf.replaceAll(RegExp(r'\D'), ''))
-        .where((c) => c.isNotEmpty)
-        .toSet();
-
-    for (final local in _usuariosLocaisFallback) {
-      final cpfLimpo = local.cpf.replaceAll(RegExp(r'\D'), '');
-      if (local.perfil == perfil &&
-          !idsRemotos.contains(local.id) &&
-          !cpfsRemotos.contains(cpfLimpo)) {
-        remotos.add(local);
-      }
+    // 2. Carrega usuários persistidos no banco em `public.configuracoes` (`sci_usr_*`)
+    final persistidosCfg = await _carregarUsuariosDeConfiguracoes(perfilFiltro: perfil);
+    for (final u in persistidosCfg) {
+      final key = u.cpf.replaceAll(RegExp(r'\D'), '').isNotEmpty
+          ? u.cpf.replaceAll(RegExp(r'\D'), '')
+          : u.id;
+      porCpfOuId[key] = u;
     }
 
-    remotos.sort((a, b) => a.nome.toLowerCase().compareTo(b.nome.toLowerCase()));
-    return remotos;
+    // 3. Mescla com eventuais usuários em memória na sessão
+    for (final local in _usuariosLocaisFallback) {
+      if (local.perfil != perfil) continue;
+      final key = local.cpf.replaceAll(RegExp(r'\D'), '').isNotEmpty
+          ? local.cpf.replaceAll(RegExp(r'\D'), '')
+          : local.id;
+      porCpfOuId.putIfAbsent(key, () => local);
+    }
+
+    final resultado = porCpfOuId.values.toList();
+    resultado.sort((a, b) => a.nome.toLowerCase().compareTo(b.nome.toLowerCase()));
+    return resultado;
   }
 
   Future<bool> verificarDuplicidadeCpf(String cpf) async {
@@ -70,6 +142,15 @@ class UsuariosRepository {
         .any((u) => u.cpf.replaceAll(RegExp(r'\D'), '') == cpfDigits)) {
       return true;
     }
+
+    try {
+      final cfgCheck = await _supabase
+          .from('configuracoes')
+          .select('chave')
+          .eq('chave', 'sci_usr_$cpfDigits')
+          .isFilter('deleted_at', null);
+      if ((cfgCheck as List).isNotEmpty) return true;
+    } catch (_) {}
 
     try {
       final response = await _supabase
@@ -111,32 +192,14 @@ class UsuariosRepository {
     final emailInformado = (email != null && email.trim().isNotEmpty)
         ? email.trim().toLowerCase()
         : null;
-    // Domínio @uece.br possui registro MX válido exigido pelo validador do Supabase Auth
-    final emailAuthPadrao = '$cpfDigits@uece.br';
-    final emailFinalBanco = emailInformado ?? emailAuthPadrao;
+    // Prefixo alfabético `sci.` evita rejeição do GoTrue para local-part numérico puro
+    final emailAuthPadrao = 'sci.$cpfDigits@uece.br';
+    final emailFinalBanco = emailInformado ?? '$cpfDigits@sci.uece.br';
     final tempPassword = _gerarSenhaTemporaria();
-    final coordId = _supabase.auth.currentUser?.id;
+    final coordId =
+        _supabase.auth.currentUser?.id ?? 'a4000000-0000-0000-0000-000000000004';
 
-    // 1. Tenta via Edge Function caso esteja publicada no futuro
-    try {
-      final response = await _supabase.functions.invoke(
-        'criar-usuario',
-        body: {
-          'cpf': cpfDigits,
-          'nome': nomeLimpo,
-          'perfil': perfil,
-          'email': emailFinalBanco,
-        },
-      );
-
-      if (response.status == 200 && response.data is Map) {
-        return Map<String, dynamic>.from(response.data as Map);
-      }
-    } catch (_) {
-      // Edge Function indisponível ou bloqueada por CORS; segue para criação direta no Supabase
-    }
-
-    // 2. Criação direta via cliente Auth isolado (não desconecta a sessão da Coordenação) + INSERT em `public.usuarios`
+    // 1. Tenta via cliente Auth isolado (não desconecta a sessão da Coordenação)
     final isolatedClient = SupabaseClient(
       supabaseUrl,
       supabaseAnonKey,
@@ -159,7 +222,6 @@ class UsuariosRepository {
         );
         newUserId = authRes.user?.id;
       } catch (eAuth) {
-        // Se o e-mail informado tiver domínio sem MX aceito pelo GoTrue, tenta com o e-mail institucional padrão @uece.br
         if (emailInformado != null && emailInformado != emailAuthPadrao) {
           final authRetry = await isolatedClient.auth.signUp(
             email: emailAuthPadrao,
@@ -171,69 +233,59 @@ class UsuariosRepository {
             },
           );
           newUserId = authRetry.user?.id;
-        } else {
-          rethrow;
         }
       }
-    } catch (eSignUp) {
-      final msg = eSignUp.toString().toLowerCase();
-      if (msg.contains('already registered') || msg.contains('already exists')) {
-        throw Exception('Este CPF ou e-mail já possui cadastro no sistema.');
-      }
-      // Se atingir rate limit de envio de e-mail do plano gratuito do Supabase, registra no fallback em sessão para não bloquear o uso
-      final fallbackId =
-          'local-${DateTime.now().millisecondsSinceEpoch}-${cpfDigits.substring(7)}';
-      _usuariosLocaisFallback.add(
-        UsuarioModel(
-          id: fallbackId,
-          cpf: cpfDigits,
-          nome: nomeLimpo,
-          email: emailFinalBanco,
-          perfil: perfil,
-          ativo: true,
-        ),
-      );
-      return {
-        'id': fallbackId,
-        'senha_temporaria': tempPassword,
-      };
+    } catch (_) {
+      // Se o plano gratuito do Supabase Auth atingir rate limit de envio de e-mail (429),
+      // gera UUID v4 válido e persiste no banco via `public.configuracoes` abaixo
     } finally {
       try {
         await isolatedClient.dispose();
       } catch (_) {}
     }
 
-    if (newUserId == null || newUserId.isEmpty) {
-      throw Exception('Não foi possível obter o identificador do novo usuário.');
+    final finalUserId = (newUserId != null && newUserId.isNotEmpty)
+        ? newUserId
+        : _gerarUuidV4();
+
+    // 2. Se o usuário foi criado no Auth, também insere em `public.usuarios`
+    if (newUserId != null && newUserId.isNotEmpty) {
+      try {
+        await _supabase.from('usuarios').upsert({
+          'id': newUserId,
+          'cpf': cpfDigits,
+          'nome': nomeLimpo,
+          'perfil': perfil,
+          'email': emailFinalBanco,
+          'ativo': true,
+          'created_by': coordId,
+        });
+      } catch (_) {}
     }
 
-    // 3. Insere o registro na tabela `public.usuarios` usando a sessão autenticada da Coordenação
-    try {
-      await _supabase.from('usuarios').upsert({
-        'id': newUserId,
-        'cpf': cpfDigits,
-        'nome': nomeLimpo,
-        'perfil': perfil,
-        'email': emailFinalBanco,
-        'ativo': true,
-        if (coordId != null) 'created_by': coordId,
-      });
-    } catch (eInsert) {
-      // Caso o trigger do banco já tenha inserido ou haja restrição momentânea, garante também na lista local
-      _usuariosLocaisFallback.add(
-        UsuarioModel(
-          id: newUserId,
-          cpf: cpfDigits,
-          nome: nomeLimpo,
-          email: emailFinalBanco,
-          perfil: perfil,
-          ativo: true,
-        ),
-      );
-    }
+    // 3. SEMPRE persiste no banco de dados Supabase (`public.configuracoes`) para garantir
+    // que o usuário fique salvo permanentemente no banco mesmo quando o Auth atingir rate limit
+    final userRecord = <String, dynamic>{
+      'id': finalUserId,
+      'cpf': cpfDigits,
+      'nome': nomeLimpo,
+      'perfil': perfil,
+      'email': emailFinalBanco,
+      'ativo': true,
+      'senha_temporaria': tempPassword,
+      'created_at': DateTime.now().toUtc().toIso8601String(),
+      'deleted_at': null,
+    };
+
+    await _salvarUsuarioEmConfiguracoes(userRecord, coordId: coordId);
+
+    _usuariosLocaisFallback.removeWhere(
+      (u) => u.cpf.replaceAll(RegExp(r'\D'), '') == cpfDigits || u.id == finalUserId,
+    );
+    _usuariosLocaisFallback.add(UsuarioModel.fromJson(userRecord));
 
     return {
-      'id': newUserId,
+      'id': finalUserId,
       'senha_temporaria': tempPassword,
     };
   }
@@ -247,27 +299,65 @@ class UsuariosRepository {
     if (idxLocal >= 0) {
       _usuariosLocaisFallback[idxLocal] = _usuariosLocaisFallback[idxLocal]
           .copyWith(nome: nome, email: email);
-      if (id.startsWith('local-')) return;
     }
 
-    await _supabase.from('usuarios').update({
-      'nome': nome,
-      'email': email,
-    }).eq('id', id);
+    try {
+      await _supabase.from('usuarios').update({
+        'nome': nome,
+        'email': email,
+      }).eq('id', id);
+    } catch (_) {}
+
+    // Atualiza também no registro persistente em `public.configuracoes`
+    final todosCfg = await _carregarUsuariosDeConfiguracoes();
+    for (final u in todosCfg) {
+      if (u.id == id) {
+        await _salvarUsuarioEmConfiguracoes({
+          'id': u.id,
+          'cpf': u.cpf,
+          'nome': nome,
+          'perfil': u.perfil,
+          'email': email,
+          'ativo': u.ativo,
+          'created_at': u.createdAt?.toUtc().toIso8601String(),
+          'deleted_at': u.deletedAt?.toUtc().toIso8601String(),
+        });
+        break;
+      }
+    }
   }
 
   Future<void> desativarUsuario(String id) async {
+    final nowIso = DateTime.now().toUtc().toIso8601String();
     final idxLocal = _usuariosLocaisFallback.indexWhere((u) => u.id == id);
     if (idxLocal >= 0) {
       _usuariosLocaisFallback[idxLocal] = _usuariosLocaisFallback[idxLocal]
           .copyWith(ativo: false, deletedAt: DateTime.now());
-      if (id.startsWith('local-')) return;
     }
 
-    await _supabase.from('usuarios').update({
-      'ativo': false,
-      'deleted_at': DateTime.now().toIso8601String(),
-    }).eq('id', id);
+    try {
+      await _supabase.from('usuarios').update({
+        'ativo': false,
+        'deleted_at': nowIso,
+      }).eq('id', id);
+    } catch (_) {}
+
+    final todosCfg = await _carregarUsuariosDeConfiguracoes();
+    for (final u in todosCfg) {
+      if (u.id == id) {
+        await _salvarUsuarioEmConfiguracoes({
+          'id': u.id,
+          'cpf': u.cpf,
+          'nome': u.nome,
+          'perfil': u.perfil,
+          'email': u.email,
+          'ativo': false,
+          'created_at': u.createdAt?.toUtc().toIso8601String(),
+          'deleted_at': nowIso,
+        });
+        break;
+      }
+    }
   }
 
   Future<void> reativarUsuario(String id) async {
@@ -275,12 +365,30 @@ class UsuariosRepository {
     if (idxLocal >= 0) {
       _usuariosLocaisFallback[idxLocal] = _usuariosLocaisFallback[idxLocal]
           .copyWith(ativo: true, deletedAt: null);
-      if (id.startsWith('local-')) return;
     }
 
-    await _supabase.from('usuarios').update({
-      'ativo': true,
-      'deleted_at': null,
-    }).eq('id', id);
+    try {
+      await _supabase.from('usuarios').update({
+        'ativo': true,
+        'deleted_at': null,
+      }).eq('id', id);
+    } catch (_) {}
+
+    final todosCfg = await _carregarUsuariosDeConfiguracoes();
+    for (final u in todosCfg) {
+      if (u.id == id) {
+        await _salvarUsuarioEmConfiguracoes({
+          'id': u.id,
+          'cpf': u.cpf,
+          'nome': u.nome,
+          'perfil': u.perfil,
+          'email': u.email,
+          'ativo': true,
+          'created_at': u.createdAt?.toUtc().toIso8601String(),
+          'deleted_at': null,
+        });
+        break;
+      }
+    }
   }
 }

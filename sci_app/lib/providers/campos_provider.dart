@@ -1,4 +1,6 @@
+import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../data/repositories/usuarios_repository.dart';
 import 'auth_provider.dart';
 
 class ProfissionalOpcao {
@@ -53,27 +55,20 @@ class ResponsaveisCampoService {
 
   Future<List<ProfissionalOpcao>> listarProfissionaisPorPerfil(String perfil) async {
     final supabase = ref.read(supabaseClientProvider);
+    final repo = UsuariosRepository(supabase);
     final resultado = <ProfissionalOpcao>[];
     final ids = <String>{};
 
     try {
-      final rows = await supabase
-          .from('usuarios')
-          .select('id, nome, perfil, email, ativo')
-          .eq('perfil', perfil)
-          .isFilter('deleted_at', null)
-          .order('nome', ascending: true);
-
-      for (final r in (rows as List)) {
-        if (r['ativo'] == false) continue;
-        final id = (r['id'] ?? '').toString();
-        final nome = (r['nome'] ?? '').toString();
-        if (id.isNotEmpty && nome.isNotEmpty && ids.add(id)) {
+      final usuarios = await repo.listarUsuariosPorPerfil(perfil);
+      for (final u in usuarios) {
+        if (!u.ativo || u.deletedAt != null) continue;
+        if (u.id.isNotEmpty && u.nome.isNotEmpty && ids.add(u.id)) {
           resultado.add(ProfissionalOpcao(
-            id: id,
-            nome: nome,
+            id: u.id,
+            nome: u.nome,
             perfil: perfil,
-            email: r['email']?.toString(),
+            email: u.email,
           ));
         }
       }
@@ -108,77 +103,105 @@ class ResponsaveisCampoService {
     String? supId = local?.supervisorId;
     String supNome = local?.supervisorNome ?? 'Não atribuído';
 
+    // 0. Verifica registro persistente em `public.configuracoes` (`sci_resp_campo_<campoId>`)
     try {
-      // 1. Busca vínculo ativo em professor_turmas
-      final profRows = await supabase
-          .from('professor_turmas')
-          .select('professor_id, data_inicio, data_fim, usuarios:professor_id(id, nome)')
-          .eq('campo_id', campoId)
+      final cfgRow = await supabase
+          .from('configuracoes')
+          .select('valor')
+          .eq('chave', 'sci_resp_campo_$campoId')
           .isFilter('deleted_at', null)
-          .order('created_at', ascending: false)
-          .limit(5);
+          .maybeSingle();
 
-      if ((profRows as List).isNotEmpty) {
-        final row = profRows.firstWhere(
-          (r) => r['data_fim'] == null,
-          orElse: () => profRows.first,
+      if (cfgRow != null && cfgRow['valor'] != null) {
+        final decoded = Map<String, dynamic>.from(
+          jsonDecode(cfgRow['valor'].toString()) as Map,
         );
-        final usr = row['usuarios'] as Map?;
-        final pid = (row['professor_id'] ?? usr?['id'] ?? '').toString();
-        final pnome = (usr?['nome'] ?? '').toString();
-        if (pid.isNotEmpty) {
-          profId = pid;
-          if (pnome.isNotEmpty) {
-            profNome = pnome;
-          } else {
-            final u = await supabase
-                .from('usuarios')
-                .select('nome')
-                .eq('id', pid)
-                .maybeSingle();
-            if (u != null && u['nome'] != null) {
-              profNome = u['nome'].toString();
-            }
-          }
-        }
+        final pid = decoded['professor_id']?.toString();
+        final pnome = decoded['professor_nome']?.toString();
+        final sid = decoded['supervisor_id']?.toString();
+        final snome = decoded['supervisor_nome']?.toString();
+        if (pid != null && pid.isNotEmpty) profId = pid;
+        if (pnome != null && pnome.isNotEmpty) profNome = pnome;
+        if (sid != null && sid.isNotEmpty) supId = sid;
+        if (snome != null && snome.isNotEmpty) supNome = snome;
       }
     } catch (_) {}
 
-    try {
-      // 2. Busca vínculo ativo em supervisor_campos
-      final supRows = await supabase
-          .from('supervisor_campos')
-          .select('supervisor_id, data_inicio, data_fim, usuarios:supervisor_id(id, nome)')
-          .eq('campo_id', campoId)
-          .isFilter('deleted_at', null)
-          .order('created_at', ascending: false)
-          .limit(5);
+    if (profId == null || profNome == 'Não atribuído') {
+      try {
+        // 1. Busca vínculo ativo em professor_turmas
+        final profRows = await supabase
+            .from('professor_turmas')
+            .select('professor_id, data_inicio, data_fim, usuarios:professor_id(id, nome)')
+            .eq('campo_id', campoId)
+            .isFilter('deleted_at', null)
+            .order('created_at', ascending: false)
+            .limit(5);
 
-      if ((supRows as List).isNotEmpty) {
-        final row = supRows.firstWhere(
-          (r) => r['data_fim'] == null,
-          orElse: () => supRows.first,
-        );
-        final usr = row['usuarios'] as Map?;
-        final sid = (row['supervisor_id'] ?? usr?['id'] ?? '').toString();
-        final snome = (usr?['nome'] ?? '').toString();
-        if (sid.isNotEmpty) {
-          supId = sid;
-          if (snome.isNotEmpty) {
-            supNome = snome;
-          } else {
-            final u = await supabase
-                .from('usuarios')
-                .select('nome')
-                .eq('id', sid)
-                .maybeSingle();
-            if (u != null && u['nome'] != null) {
-              supNome = u['nome'].toString();
+        if ((profRows as List).isNotEmpty) {
+          final row = profRows.firstWhere(
+            (r) => r['data_fim'] == null,
+            orElse: () => profRows.first,
+          );
+          final usr = row['usuarios'] as Map?;
+          final pid = (row['professor_id'] ?? usr?['id'] ?? '').toString();
+          final pnome = (usr?['nome'] ?? '').toString();
+          if (pid.isNotEmpty) {
+            profId = pid;
+            if (pnome.isNotEmpty) {
+              profNome = pnome;
+            } else {
+              final u = await supabase
+                  .from('usuarios')
+                  .select('nome')
+                  .eq('id', pid)
+                  .maybeSingle();
+              if (u != null && u['nome'] != null) {
+                profNome = u['nome'].toString();
+              }
             }
           }
         }
-      }
-    } catch (_) {}
+      } catch (_) {}
+    }
+
+    if (supId == null || supNome == 'Não atribuído') {
+      try {
+        // 2. Busca vínculo ativo em supervisor_campos
+        final supRows = await supabase
+            .from('supervisor_campos')
+            .select('supervisor_id, data_inicio, data_fim, usuarios:supervisor_id(id, nome)')
+            .eq('campo_id', campoId)
+            .isFilter('deleted_at', null)
+            .order('created_at', ascending: false)
+            .limit(5);
+
+        if ((supRows as List).isNotEmpty) {
+          final row = supRows.firstWhere(
+            (r) => r['data_fim'] == null,
+            orElse: () => supRows.first,
+          );
+          final usr = row['usuarios'] as Map?;
+          final sid = (row['supervisor_id'] ?? usr?['id'] ?? '').toString();
+          final snome = (usr?['nome'] ?? '').toString();
+          if (sid.isNotEmpty) {
+            supId = sid;
+            if (snome.isNotEmpty) {
+              supNome = snome;
+            } else {
+              final u = await supabase
+                  .from('usuarios')
+                  .select('nome')
+                  .eq('id', sid)
+                  .maybeSingle();
+              if (u != null && u['nome'] != null) {
+                supNome = u['nome'].toString();
+              }
+            }
+          }
+        }
+      } catch (_) {}
+    }
 
     // Se não encontrou vínculo salvo, usa o primeiro profissional disponível como sugestão visual
     if (profId == null || profNome == 'Não atribuído') {
@@ -230,6 +253,28 @@ class ResponsaveisCampoService {
           ...map,
           campoId: novo,
         });
+
+    // Persiste em `public.configuracoes` (`sci_resp_campo_<campoId>`) para garantir gravação no banco para qualquer profissional
+    try {
+      await supabase.from('configuracoes').upsert(
+        {
+          'chave': 'sci_resp_campo_$campoId',
+          'valor': jsonEncode({
+            'professor_id': novo.professorId,
+            'professor_nome': novo.professorNome,
+            'supervisor_id': novo.supervisorId,
+            'supervisor_nome': novo.supervisorNome,
+            'updated_at': now.toUtc().toIso8601String(),
+          }),
+          'descricao': 'Responsáveis (Professor e Supervisor) do campo $campoId',
+          'escopo_id': campoId,
+          'created_by': currentUserId,
+          'updated_by': currentUserId,
+          'deleted_at': null,
+        },
+        onConflict: 'chave',
+      );
+    } catch (_) {}
 
     if (professorId != null && professorId.isNotEmpty) {
       try {
