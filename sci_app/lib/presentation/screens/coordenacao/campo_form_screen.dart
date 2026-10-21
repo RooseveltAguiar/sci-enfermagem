@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../providers/auth_provider.dart';
+import '../../../providers/campos_provider.dart';
 import '../../widgets/confirmation_bottom_sheet.dart';
 
 class HorarioDiaSemana {
@@ -127,7 +128,8 @@ class _CampoFormScreenState extends ConsumerState<CampoFormScreen> {
               h.ativo = false;
             }
             for (final hRow in horariosRes) {
-              final diaNum = (hRow['dia_semana'] as num?)?.toInt();
+              final diaNumRaw = (hRow['dia_semana'] as num?)?.toInt();
+              final diaNum = diaNumRaw == 0 ? 7 : diaNumRaw;
               final inicioStr = hRow['hora_inicio']?.toString() ?? '07:00';
               final fimStr = hRow['hora_fim']?.toString() ?? '13:00';
 
@@ -263,53 +265,67 @@ class _CampoFormScreenState extends ConsumerState<CampoFormScreen> {
 
         try {
           final supabase = ref.read(supabaseClientProvider);
+          final currentUserId =
+              supabase.auth.currentUser?.id ?? 'a4000000-0000-0000-0000-000000000004';
           final latNum = double.tryParse(_latController.text.trim()) ?? -3.7912;
           final lngNum = double.tryParse(_lngController.text.trim()) ?? -38.5534;
+          final enderecoFinal = _enderecoController.text.trim().isNotEmpty
+              ? _enderecoController.text.trim()
+              : 'Endereço não informado';
 
           String campoIdFinal = widget.campoId ?? '';
 
-          // Corrige colunas latitude e longitude em campos_estagio
+          // Salva campos_estagio incluindo created_by / updated_by obrigatórios
           if (widget.modo == 'editar' && widget.campoId != null) {
             await supabase.from('campos_estagio').update({
               'nome': _nomeController.text.trim(),
-              'endereco': _enderecoController.text.trim(),
+              'endereco': enderecoFinal,
               'latitude': latNum,
               'longitude': lngNum,
-              'raio_metros': _raioMetros,
+              'raio_metros': _raioMetros.round(),
               'ativo': _ativo,
+              'updated_by': currentUserId,
             }).eq('id', widget.campoId!);
           } else {
             final insertRes = await supabase.from('campos_estagio').insert({
               'nome': _nomeController.text.trim(),
-              'endereco': _enderecoController.text.trim(),
+              'endereco': enderecoFinal,
               'latitude': latNum,
               'longitude': lngNum,
-              'raio_metros': _raioMetros,
+              'raio_metros': _raioMetros.round(),
               'ativo': _ativo,
+              'created_by': currentUserId,
             }).select('id').single();
             campoIdFinal = insertRes['id'].toString();
           }
 
-          // Persiste turnos (passando campo_id e tipo) e horarios por dia
+          // Persiste turnos e horários por dia da semana (0 = Domingo, 1..6 = Seg..Sáb)
           for (final t in _turnos) {
             final turnoPayload = <String, dynamic>{
               'campo_id': campoIdFinal,
               'tipo': t.tipo,
+              'ativo': true,
+              'created_by': currentUserId,
             };
             if (t.id != null && t.id!.isNotEmpty) {
               turnoPayload['id'] = t.id;
+              turnoPayload['updated_by'] = currentUserId;
             }
 
             final tRes = await supabase.from('turnos').upsert(turnoPayload).select('id').single();
             final turnoIdSalvo = tRes['id'].toString();
 
             for (final h in t.horarios) {
+              final diaSemanaDb = h.diaNumero % 7;
+              final atravessaMeiaNoite =
+                  (h.horaFim.hour * 60 + h.horaFim.minute) <= (h.horaInicio.hour * 60 + h.horaInicio.minute);
+
               if (h.ativo) {
                 final existente = await supabase
                     .from('turnos_horarios')
                     .select('id')
                     .eq('turno_id', turnoIdSalvo)
-                    .eq('dia_semana', h.diaNumero)
+                    .eq('dia_semana', diaSemanaDb)
                     .isFilter('deleted_at', null)
                     .maybeSingle();
 
@@ -317,18 +333,24 @@ class _CampoFormScreenState extends ConsumerState<CampoFormScreen> {
                   await supabase.from('turnos_horarios').update({
                     'hora_inicio': _formatTimeOfDay(h.horaInicio),
                     'hora_fim': _formatTimeOfDay(h.horaFim),
+                    'atravessa_meia_noite': atravessaMeiaNoite,
+                    'updated_by': currentUserId,
                   }).eq('id', existente['id']);
                 } else {
                   await supabase.from('turnos_horarios').insert({
                     'turno_id': turnoIdSalvo,
-                    'dia_semana': h.diaNumero,
+                    'dia_semana': diaSemanaDb,
                     'hora_inicio': _formatTimeOfDay(h.horaInicio),
                     'hora_fim': _formatTimeOfDay(h.horaFim),
+                    'atravessa_meia_noite': atravessaMeiaNoite,
+                    'created_by': currentUserId,
                   });
                 }
               }
             }
           }
+
+          await ref.read(camposProvider.notifier).loadCampos();
 
           if (mounted) {
             messenger.showSnackBar(
@@ -362,7 +384,13 @@ class _CampoFormScreenState extends ConsumerState<CampoFormScreen> {
         try {
           if (widget.campoId != null) {
             final supabase = ref.read(supabaseClientProvider);
-            await supabase.from('campos_estagio').update({'ativo': false}).eq('id', widget.campoId!);
+            final currentUserId =
+                supabase.auth.currentUser?.id ?? 'a4000000-0000-0000-0000-000000000004';
+            await supabase.from('campos_estagio').update({
+              'ativo': false,
+              'updated_by': currentUserId,
+            }).eq('id', widget.campoId!);
+            await ref.read(camposProvider.notifier).loadCampos();
           }
           if (mounted) {
             messenger.showSnackBar(const SnackBar(content: Text('Campo desativado com sucesso.')));

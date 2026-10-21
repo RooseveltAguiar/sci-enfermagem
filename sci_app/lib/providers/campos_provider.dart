@@ -21,14 +21,16 @@ class CampoEstagio {
   });
 
   factory CampoEstagio.fromJson(Map<String, dynamic> json) {
+    final rawLat = json['latitude'] ?? json['lat_centro'] ?? json['lat'];
+    final rawLng = json['longitude'] ?? json['lng_centro'] ?? json['lng'];
     return CampoEstagio(
-      id: json['id'],
-      nome: json['nome'],
-      endereco: json['endereco'],
+      id: (json['id'] ?? '').toString(),
+      nome: (json['nome'] ?? 'Campo de Estágio').toString(),
+      endereco: (json['endereco'] ?? '').toString(),
       ativo: json['ativo'] ?? true,
       raioMetros: json['raio_metros'] != null ? (json['raio_metros'] as num).toDouble() : 150.0,
-      lat: json['lat_centro'] != null ? (json['lat_centro'] as num).toDouble() : 0.0,
-      lng: json['lng_centro'] != null ? (json['lng_centro'] as num).toDouble() : 0.0,
+      lat: rawLat != null ? (rawLat as num).toDouble() : 0.0,
+      lng: rawLng != null ? (rawLng as num).toDouble() : 0.0,
     );
   }
 }
