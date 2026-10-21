@@ -77,6 +77,11 @@ class _CampoFormScreenState extends ConsumerState<CampoFormScreen> {
   bool _ativo = true;
   bool _isLoading = false;
 
+  String? _professorSelecionadoId;
+  String? _supervisorSelecionadoId;
+  List<ProfissionalOpcao> _professoresDisponiveis = [];
+  List<ProfissionalOpcao> _supervisoresDisponiveis = [];
+
   final List<TurnoModel> _turnos = [];
 
   @override
@@ -86,12 +91,30 @@ class _CampoFormScreenState extends ConsumerState<CampoFormScreen> {
       _carregarDadosCampoReal();
     } else {
       _turnos.add(TurnoModel.criarPadrao('manha'));
+      _carregarOpcoesProfissionais();
     }
+  }
+
+  Future<void> _carregarOpcoesProfissionais() async {
+    try {
+      final respService = ref.read(responsaveisCampoServiceProvider);
+      final profs = await respService.listarProfissionaisPorPerfil('professor');
+      final sups = await respService.listarProfissionaisPorPerfil('supervisor');
+      if (mounted) {
+        setState(() {
+          _professoresDisponiveis = profs;
+          _supervisoresDisponiveis = sups;
+          _professorSelecionadoId ??= profs.isNotEmpty ? profs.first.id : null;
+          _supervisorSelecionadoId ??= sups.isNotEmpty ? sups.first.id : null;
+        });
+      }
+    } catch (_) {}
   }
 
   Future<void> _carregarDadosCampoReal() async {
     setState(() => _isLoading = true);
     final supabase = ref.read(supabaseClientProvider);
+    final respService = ref.read(responsaveisCampoServiceProvider);
 
     try {
       final campoRes = await supabase
@@ -108,6 +131,21 @@ class _CampoFormScreenState extends ConsumerState<CampoFormScreen> {
         _raioMetros = campoRes['raio_metros'] != null ? (campoRes['raio_metros'] as num).toDouble() : 150.0;
         _ativo = campoRes['ativo'] ?? true;
       }
+
+      // Carrega profissionais disponíveis e responsáveis atuais do campo
+      final profs = await respService.listarProfissionaisPorPerfil('professor');
+      final sups = await respService.listarProfissionaisPorPerfil('supervisor');
+      final respAtual = await respService.carregarResponsaveis(widget.campoId!);
+      _professoresDisponiveis = profs;
+      _supervisoresDisponiveis = sups;
+      _professorSelecionadoId = (respAtual.professorId != null &&
+              profs.any((p) => p.id == respAtual.professorId))
+          ? respAtual.professorId
+          : (profs.isNotEmpty ? profs.first.id : null);
+      _supervisorSelecionadoId = (respAtual.supervisorId != null &&
+              sups.any((s) => s.id == respAtual.supervisorId))
+          ? respAtual.supervisorId
+          : (sups.isNotEmpty ? sups.first.id : null);
 
       // Carrega turnos reais lendo a coluna 'tipo' (enum manha/tarde/noite)
       final turnosRes = await supabase
@@ -350,6 +388,22 @@ class _CampoFormScreenState extends ConsumerState<CampoFormScreen> {
             }
           }
 
+          // Salva Professor Responsável e Supervisor do Campo selecionados
+          final profEscolhido = _professoresDisponiveis
+              .where((p) => p.id == _professorSelecionadoId)
+              .toList();
+          final supEscolhido = _supervisoresDisponiveis
+              .where((s) => s.id == _supervisorSelecionadoId)
+              .toList();
+
+          await ref.read(responsaveisCampoServiceProvider).salvarResponsaveis(
+                campoId: campoIdFinal,
+                professorId: _professorSelecionadoId,
+                professorNome: profEscolhido.isNotEmpty ? profEscolhido.first.nome : null,
+                supervisorId: _supervisorSelecionadoId,
+                supervisorNome: supEscolhido.isNotEmpty ? supEscolhido.first.nome : null,
+              );
+
           await ref.read(camposProvider.notifier).loadCampos();
 
           if (mounted) {
@@ -477,6 +531,58 @@ class _CampoFormScreenState extends ConsumerState<CampoFormScreen> {
               title: const Text('Campo Ativo'),
               value: _ativo,
               onChanged: (val) => setState(() => _ativo = val),
+            ),
+
+            const Divider(height: 36),
+
+            const Text(
+              'Profissionais Responsáveis pelo Campo',
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              'Defina qual Professor e qual Supervisor acompanharão este campo de estágio:',
+              style: TextStyle(color: Colors.grey, fontSize: 12.5),
+            ),
+            const SizedBox(height: 14),
+            DropdownButtonFormField<String>(
+              initialValue: (_professorSelecionadoId != null &&
+                      _professoresDisponiveis.any((p) => p.id == _professorSelecionadoId))
+                  ? _professorSelecionadoId
+                  : null,
+              isExpanded: true,
+              decoration: const InputDecoration(
+                labelText: 'Professor Responsável',
+                prefixIcon: Icon(Icons.school_outlined),
+                border: OutlineInputBorder(),
+              ),
+              items: _professoresDisponiveis
+                  .map((p) => DropdownMenuItem<String>(
+                        value: p.id,
+                        child: Text(p.nome, overflow: TextOverflow.ellipsis),
+                      ))
+                  .toList(),
+              onChanged: (val) => setState(() => _professorSelecionadoId = val),
+            ),
+            const SizedBox(height: 14),
+            DropdownButtonFormField<String>(
+              initialValue: (_supervisorSelecionadoId != null &&
+                      _supervisoresDisponiveis.any((s) => s.id == _supervisorSelecionadoId))
+                  ? _supervisorSelecionadoId
+                  : null,
+              isExpanded: true,
+              decoration: const InputDecoration(
+                labelText: 'Supervisor do Campo',
+                prefixIcon: Icon(Icons.badge_outlined),
+                border: OutlineInputBorder(),
+              ),
+              items: _supervisoresDisponiveis
+                  .map((s) => DropdownMenuItem<String>(
+                        value: s.id,
+                        child: Text(s.nome, overflow: TextOverflow.ellipsis),
+                      ))
+                  .toList(),
+              onChanged: (val) => setState(() => _supervisorSelecionadoId = val),
             ),
 
             const Divider(height: 48),

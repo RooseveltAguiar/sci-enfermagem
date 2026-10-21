@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../providers/auth_provider.dart';
+import '../../../providers/campos_provider.dart';
 import '../../widgets/logout_button.dart';
 
 class CampoDetalhesScreen extends ConsumerStatefulWidget {
@@ -21,8 +22,10 @@ class _CampoDetalhesScreenState extends ConsumerState<CampoDetalhesScreen> {
   bool _loading = true;
   String _nomeCampo = '';
   String _enderecoCampo = '';
-  final String _professorResponsavel = 'Prof. Dr. Roberto Silva';
-  final String _supervisorCampo = 'Enf. Dra. Ana Paula Santos';
+  String? _professorId;
+  String _professorResponsavel = 'Carregando...';
+  String? _supervisorId;
+  String _supervisorCampo = 'Carregando...';
   List<Map<String, dynamic>> _alunos = [];
 
   @override
@@ -35,6 +38,7 @@ class _CampoDetalhesScreenState extends ConsumerState<CampoDetalhesScreen> {
     setState(() => _loading = true);
     try {
       final supabase = ref.read(supabaseClientProvider);
+      final respService = ref.read(responsaveisCampoServiceProvider);
 
       // 1. Dados do Campo
       final campoRes = await supabase
@@ -51,7 +55,15 @@ class _CampoDetalhesScreenState extends ConsumerState<CampoDetalhesScreen> {
         _enderecoCampo = 'Av. Santos Dumont, 1200 - Fortaleza, CE';
       }
 
-      // 2. Alunos Alocados no Campo
+      // 2. Carrega responsáveis atuais do campo
+      final resp = await respService.carregarResponsaveis(widget.campoId);
+
+      _professorId = resp.professorId;
+      _professorResponsavel = resp.professorNome;
+      _supervisorId = resp.supervisorId;
+      _supervisorCampo = resp.supervisorNome;
+
+      // 3. Alunos Alocados no Campo
       final alocacoesRes = await supabase
           .from('alocacoes_alunos')
           .select('*, usuarios:aluno_id(id, nome, cpf, email)')
@@ -101,6 +113,8 @@ class _CampoDetalhesScreenState extends ConsumerState<CampoDetalhesScreen> {
     } catch (_) {
       _nomeCampo = widget.campoNome ?? 'Hospital Geral de Fortaleza (HGF)';
       _enderecoCampo = 'Av. Santos Dumont, 1200 - Fortaleza, CE';
+      _professorResponsavel = 'Prof. Dr. Roberto Silva';
+      _supervisorCampo = 'Enf. Dra. Ana Paula Santos';
       _alunos = [
         {
           'aluno_id': 'a1000000-0000-0000-0000-000000000001',
@@ -122,6 +136,140 @@ class _CampoDetalhesScreenState extends ConsumerState<CampoDetalhesScreen> {
     } finally {
       if (mounted) setState(() => _loading = false);
     }
+  }
+
+  Future<void> _selecionarProfissional({required bool isProfessor}) async {
+    final respService = ref.read(responsaveisCampoServiceProvider);
+    final opcoes = isProfessor
+        ? await respService.listarProfissionaisPorPerfil('professor')
+        : await respService.listarProfissionaisPorPerfil('supervisor');
+
+    if (!mounted) return;
+
+    String? selecionadoId = isProfessor ? _professorId : _supervisorId;
+    if (selecionadoId == null || !opcoes.any((o) => o.id == selecionadoId)) {
+      selecionadoId = opcoes.isNotEmpty ? opcoes.first.id : null;
+    }
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          return AlertDialog(
+            title: Row(
+              children: [
+                Icon(
+                  isProfessor ? Icons.school : Icons.badge,
+                  color: isProfessor ? Colors.blue.shade700 : Colors.teal.shade700,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    isProfessor
+                        ? 'Escolher Professor Responsável'
+                        : 'Escolher Supervisor do Campo',
+                    style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ],
+            ),
+            content: SizedBox(
+              width: 420,
+              child: opcoes.isEmpty
+                  ? Text(
+                      isProfessor
+                          ? 'Nenhum usuário com perfil Professor encontrado. Cadastre um professor na aba Usuários.'
+                          : 'Nenhum usuário com perfil Supervisor encontrado. Cadastre um supervisor na aba Usuários.',
+                    )
+                  : Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Text(
+                          isProfessor
+                              ? 'Selecione qual professor ficará responsável por acompanhar este campo de estágio:'
+                              : 'Selecione qual supervisor ficará responsável por validar presenças e atividades neste campo:',
+                          style: TextStyle(fontSize: 13, color: Colors.grey.shade700),
+                        ),
+                        const SizedBox(height: 16),
+                        DropdownButtonFormField<String>(
+                          initialValue: selecionadoId,
+                          isExpanded: true,
+                          decoration: InputDecoration(
+                            labelText: isProfessor ? 'Professor Responsável' : 'Supervisor do Campo',
+                            border: const OutlineInputBorder(),
+                          ),
+                          items: opcoes
+                              .map((op) => DropdownMenuItem<String>(
+                                    value: op.id,
+                                    child: Text(
+                                      op.nome,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ))
+                              .toList(),
+                          onChanged: (val) {
+                            setDialogState(() {
+                              selecionadoId = val;
+                            });
+                          },
+                        ),
+                      ],
+                    ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(),
+                child: const Text('Cancelar'),
+              ),
+              if (opcoes.isNotEmpty)
+                FilledButton.icon(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFF1B6B45),
+                  ),
+                  icon: const Icon(Icons.check, size: 18),
+                  label: const Text('Salvar Escolha'),
+                  onPressed: () async {
+                    if (selecionadoId == null) return;
+                    final escolhido = opcoes.firstWhere((o) => o.id == selecionadoId);
+                    Navigator.of(ctx).pop();
+
+                    await respService.salvarResponsaveis(
+                      campoId: widget.campoId,
+                      professorId: isProfessor ? escolhido.id : _professorId,
+                      professorNome: isProfessor ? escolhido.nome : _professorResponsavel,
+                      supervisorId: !isProfessor ? escolhido.id : _supervisorId,
+                      supervisorNome: !isProfessor ? escolhido.nome : _supervisorCampo,
+                    );
+
+                    if (mounted) {
+                      setState(() {
+                        if (isProfessor) {
+                          _professorId = escolhido.id;
+                          _professorResponsavel = escolhido.nome;
+                        } else {
+                          _supervisorId = escolhido.id;
+                          _supervisorCampo = escolhido.nome;
+                        }
+                      });
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            isProfessor
+                                ? 'Professor responsável atualizado para ${escolhido.nome}!'
+                                : 'Supervisor do campo atualizado para ${escolhido.nome}!',
+                          ),
+                          backgroundColor: const Color(0xFF1B6B45),
+                        ),
+                      );
+                    }
+                  },
+                ),
+            ],
+          );
+        },
+      ),
+    );
   }
 
   String _formatDtStr(String dtStr) {
@@ -199,13 +347,15 @@ class _CampoDetalhesScreenState extends ConsumerState<CampoDetalhesScreen> {
                             titulo: 'Professor Responsável',
                             nome: _professorResponsavel,
                             corIcone: Colors.blue.shade700,
+                            onAlterar: () => _selecionarProfissional(isProfessor: true),
                           ),
-                          const SizedBox(height: 10),
+                          const SizedBox(height: 12),
                           _buildResponsavelRow(
                             icon: Icons.badge,
                             titulo: 'Supervisor do Campo',
                             nome: _supervisorCampo,
                             corIcone: Colors.teal.shade700,
+                            onAlterar: () => _selecionarProfissional(isProfessor: false),
                           ),
                         ],
                       ),
@@ -326,19 +476,38 @@ class _CampoDetalhesScreenState extends ConsumerState<CampoDetalhesScreen> {
     required String titulo,
     required String nome,
     required Color corIcone,
+    required VoidCallback onAlterar,
   }) {
-    return Row(
-      children: [
-        Icon(icon, size: 20, color: corIcone),
-        const SizedBox(width: 10),
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+    return InkWell(
+      borderRadius: BorderRadius.circular(10),
+      onTap: onAlterar,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4.0, horizontal: 4.0),
+        child: Row(
           children: [
-            Text(titulo, style: const TextStyle(fontSize: 11, color: Colors.black54)),
-            Text(nome, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+            Icon(icon, size: 22, color: corIcone),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(titulo, style: const TextStyle(fontSize: 11, color: Colors.black54)),
+                  Text(nome, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                ],
+              ),
+            ),
+            OutlinedButton.icon(
+              onPressed: onAlterar,
+              style: OutlinedButton.styleFrom(
+                visualDensity: VisualDensity.compact,
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              ),
+              icon: const Icon(Icons.edit_outlined, size: 15),
+              label: const Text('Escolher', style: TextStyle(fontSize: 12)),
+            ),
           ],
         ),
-      ],
+      ),
     );
   }
 
