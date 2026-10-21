@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../main.dart';
@@ -22,9 +23,12 @@ class _RegistrarPresencaScreenState extends ConsumerState<RegistrarPresencaScree
   
   bool _isGettingLocation = false;
   bool _locationObtained = false;
-  bool _gpsDisponivel = true;
   double? _lat;
   double? _lng;
+  double? _precisaoGps;
+  double? _distanciaMetros;
+  bool _dentroDoRaio = false;
+  String? _erroLocalizacao;
   
   @override
   Widget build(BuildContext context) {
@@ -79,12 +83,33 @@ class _RegistrarPresencaScreenState extends ConsumerState<RegistrarPresencaScree
     );
   }
 
+  String _formatarDistancia(double? metros) {
+    if (metros == null) return '0 m';
+    if (metros >= 1000) {
+      return '${(metros / 1000).toStringAsFixed(2)} km (${metros.toStringAsFixed(0)} metros)';
+    }
+    return '${metros.toStringAsFixed(0)} metros';
+  }
+
+  CampoEstagio? _obterCampoParaValidacao(EstadoJornadaHoje? jornada) {
+    if (_selectedCampo != null) return _selectedCampo;
+    final campos = ref.read(camposAlunoProvider).valueOrNull ?? [];
+    final nomeFrequencia = jornada?.frequenciaAtual?.campoNome;
+    if (nomeFrequencia != null) {
+      try {
+        return campos.firstWhere((c) => c.nome.toLowerCase() == nomeFrequencia.toLowerCase());
+      } catch (_) {}
+    }
+    return campos.isNotEmpty ? campos.first : null;
+  }
+
   Widget _buildCheckoutMode(BuildContext context, EstadoJornadaHoje jornada) {
     final freq = jornada.frequenciaAtual;
     final horaEntradaStr = jornada.horaEntrada != null
         ? '${jornada.horaEntrada!.hour.toString().padLeft(2, '0')}:${jornada.horaEntrada!.minute.toString().padLeft(2, '0')}'
         : '07:00';
     final horasEmCampo = jornada.horasEmCampo;
+    final campo = _obterCampoParaValidacao(jornada);
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(20.0),
@@ -132,49 +157,119 @@ class _RegistrarPresencaScreenState extends ConsumerState<RegistrarPresencaScree
                 Text('Obtendo localização de saída via GPS...'),
               ],
             )
-          else if (_locationObtained && _gpsDisponivel)
-            const Column(
-              children: [
-                Icon(Icons.location_on, color: Colors.green, size: 56),
-                SizedBox(height: 8),
-                Text('Localização de saída obtida!', style: TextStyle(color: Colors.green, fontWeight: FontWeight.bold)),
-              ],
-            )
-          else if (!_gpsDisponivel)
+          else if (_erroLocalizacao != null)
             Container(
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
-                color: Colors.amber.shade50,
+                color: Colors.red.shade50,
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.amber.shade200),
+                border: Border.all(color: Colors.red.shade200),
               ),
-              child: const Row(
+              child: Column(
                 children: [
-                  Icon(Icons.warning_amber_rounded, color: Colors.deepOrange),
-                  SizedBox(width: 12),
-                  Expanded(
-                    child: Text('GPS indisponível para saída. O registro será enviado com pendência para o supervisor.'),
+                  const Icon(Icons.location_off, color: Colors.red, size: 48),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Falha ao obter localização de saída',
+                    style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(_erroLocalizacao!, textAlign: TextAlign.center),
+                  const SizedBox(height: 12),
+                  OutlinedButton.icon(
+                    onPressed: () => _obterLocalizacao(campo),
+                    icon: const Icon(Icons.refresh),
+                    label: const Text('Tentar Novamente'),
                   ),
                 ],
               ),
-            ),
-
-          const SizedBox(height: 24),
-
-          if (!_locationObtained && !_isGettingLocation)
+            )
+          else if (_locationObtained && _dentroDoRaio)
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.green.shade50,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.green.shade300),
+              ),
+              child: Column(
+                children: [
+                  const Icon(Icons.check_circle_rounded, color: Colors.green, size: 56),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Localização de saída validada!',
+                    style: TextStyle(color: Colors.green, fontWeight: FontWeight.bold, fontSize: 16),
+                  ),
+                  const SizedBox(height: 4),
+                  Text('Distância do estágio: ${_formatarDistancia(_distanciaMetros)}'),
+                  Text(
+                    'Dentro do raio permitido de ${campo?.raioMetros.toInt() ?? 150}m. Saída liberada!',
+                    style: const TextStyle(color: Colors.black54, fontSize: 13),
+                  ),
+                  const SizedBox(height: 8),
+                  TextButton.icon(
+                    onPressed: () => _obterLocalizacao(campo),
+                    icon: const Icon(Icons.refresh, size: 16),
+                    label: const Text('Atualizar GPS'),
+                  ),
+                ],
+              ),
+            )
+          else if (_locationObtained && !_dentroDoRaio)
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.red.shade50,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.red.shade300),
+              ),
+              child: Column(
+                children: [
+                  const Icon(Icons.wrong_location_rounded, color: Colors.red, size: 56),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Saída NÃO liberada: Fora do raio do estágio',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold, fontSize: 16),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Sua distância atual: ${_formatarDistancia(_distanciaMetros)}',
+                    style: const TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  Text(
+                    'Raio permitido: ${campo?.raioMetros.toInt() ?? 150} metros.',
+                    style: const TextStyle(color: Colors.black87),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Você precisa estar no local de estágio para registrar a saída.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: Colors.red, fontSize: 13),
+                  ),
+                  const SizedBox(height: 12),
+                  FilledButton.tonalIcon(
+                    onPressed: () => _obterLocalizacao(campo),
+                    icon: const Icon(Icons.my_location),
+                    label: const Text('Atualizar Minha Localização'),
+                  ),
+                ],
+              ),
+            )
+          else
             OutlinedButton.icon(
-              onPressed: _obterLocalizacao,
+              onPressed: () => _obterLocalizacao(campo),
               icon: const Icon(Icons.my_location),
               label: const Text('Obter Localização de Saída'),
             ),
 
-          const SizedBox(height: 16),
+          const SizedBox(height: 24),
 
           FilledButton.icon(
             style: FilledButton.styleFrom(
               padding: const EdgeInsets.symmetric(vertical: 16),
             ),
-            onPressed: (_locationObtained || !_gpsDisponivel)
+            onPressed: (_locationObtained && _dentroDoRaio)
                 ? () => _confirmarCheckoutModal(context, freq?.id ?? '', horaEntradaStr, horasEmCampo)
                 : null,
             icon: const Icon(Icons.logout_rounded),
@@ -196,9 +291,18 @@ class _RegistrarPresencaScreenState extends ConsumerState<RegistrarPresencaScree
           setState(() {
             _currentStep += 1;
           });
-          _obterLocalizacao();
+          _obterLocalizacao(_selectedCampo);
         } else if (_currentStep == 1) {
-          _confirmarPresenca();
+          if (_dentroDoRaio) {
+            _confirmarPresenca();
+          } else {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Presença bloqueada: Você deve estar dentro do raio do campo de estágio.'),
+                backgroundColor: Colors.red,
+              ),
+            );
+          }
         }
       },
       controlsBuilder: (context, details) {
@@ -217,7 +321,7 @@ class _RegistrarPresencaScreenState extends ConsumerState<RegistrarPresencaScree
               children: [
                 Expanded(
                   child: FilledButton(
-                    onPressed: _locationObtained || !_gpsDisponivel ? details.onStepContinue : null,
+                    onPressed: (_locationObtained && _dentroDoRaio) ? details.onStepContinue : null,
                     child: const Text('Confirmar Presença'),
                   ),
                 ),
@@ -245,7 +349,13 @@ class _RegistrarPresencaScreenState extends ConsumerState<RegistrarPresencaScree
                     decoration: const InputDecoration(labelText: 'Campo de Estágio', border: OutlineInputBorder()),
                     initialValue: _selectedCampo,
                     items: campos.map((c) => DropdownMenuItem(value: c, child: Text(c.nome))).toList(),
-                    onChanged: (val) => setState(() => _selectedCampo = val),
+                    onChanged: (val) {
+                      setState(() {
+                        _selectedCampo = val;
+                        _locationObtained = false;
+                        _dentroDoRaio = false;
+                      });
+                    },
                   ),
                   const SizedBox(height: 16),
                   DropdownButtonFormField<String>(
@@ -269,46 +379,152 @@ class _RegistrarPresencaScreenState extends ConsumerState<RegistrarPresencaScree
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               if (_selectedCampo != null) ...[
-                Text('Local: ${_selectedCampo!.nome}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                Text('Turno: $_selectedTurno'),
-                const SizedBox(height: 24),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade100,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: Colors.grey.shade300),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(_selectedCampo!.nome, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                      const SizedBox(height: 4),
+                      Text('Turno: $_selectedTurno'),
+                      Text('Raio permitido para check-in: ${_selectedCampo!.raioMetros.toInt()} metros'),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 16),
               ],
               
               if (_isGettingLocation)
-                const Column(
-                  children: [
-                    CircularProgressIndicator(semanticsLabel: 'Carregando...'),
-                    SizedBox(height: 16),
-                    Text('Obtendo localização do satélite...'),
-                  ],
-                )
-              else if (_locationObtained && _gpsDisponivel)
-                Column(
-                  children: [
-                    const Icon(Icons.location_on, color: Colors.green, size: 64),
-                    const SizedBox(height: 16),
-                    const Text(
-                      'Localização obtida com sucesso!',
-                      style: TextStyle(color: Colors.green, fontWeight: FontWeight.bold),
-                    ),
-                    if (_lat != null && _lng != null) ...[
-                      const SizedBox(height: 6),
-                      Text(
-                        'Coordenadas: ${_lat!.toStringAsFixed(5)}, ${_lng!.toStringAsFixed(5)}',
-                        style: const TextStyle(fontSize: 12, color: Colors.black54),
-                      ),
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 24),
+                  child: Column(
+                    children: [
+                      CircularProgressIndicator(semanticsLabel: 'Carregando...'),
+                      SizedBox(height: 16),
+                      Text('Consultando satélites e verificando sua distância do campo...'),
                     ],
-                  ],
+                  ),
                 )
-              else if (!_gpsDisponivel)
+              else if (_erroLocalizacao != null)
                 Container(
                   padding: const EdgeInsets.all(16),
-                  color: Colors.amber.shade100,
-                  child: const Row(
+                  decoration: BoxDecoration(
+                    color: Colors.red.shade50,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.red.shade200),
+                  ),
+                  child: Column(
                     children: [
-                      Icon(Icons.warning_amber_rounded, color: Colors.deepOrange),
-                      SizedBox(width: 16),
-                      Expanded(child: Text('Localização indisponível. Seu supervisor será notificado para confirmar sua presença fisicamente.')),
+                      const Icon(Icons.location_off, color: Colors.red, size: 48),
+                      const SizedBox(height: 8),
+                      const Text(
+                        'Falha ao obter localização',
+                        style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold, fontSize: 16),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(_erroLocalizacao!, textAlign: TextAlign.center),
+                      const SizedBox(height: 16),
+                      OutlinedButton.icon(
+                        onPressed: () => _obterLocalizacao(_selectedCampo),
+                        icon: const Icon(Icons.refresh),
+                        label: const Text('Tentar Novamente'),
+                      ),
+                    ],
+                  ),
+                )
+              else if (_locationObtained && _dentroDoRaio)
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Colors.green.shade50,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.green.shade300),
+                  ),
+                  child: Column(
+                    children: [
+                      const Icon(Icons.check_circle_rounded, color: Colors.green, size: 56),
+                      const SizedBox(height: 12),
+                      const Text(
+                        'Localização validada com sucesso!',
+                        style: TextStyle(color: Colors.green, fontWeight: FontWeight.bold, fontSize: 16),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        'Você está a ${_formatarDistancia(_distanciaMetros)} do centro do estágio.',
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                      Text(
+                        'Dentro do raio permitido de ${_selectedCampo?.raioMetros.toInt() ?? 150}m. Presença liberada!',
+                        style: const TextStyle(color: Colors.black54, fontSize: 13),
+                      ),
+                      if (_lat != null && _lng != null) ...[
+                        const SizedBox(height: 6),
+                        Text(
+                          'GPS: ${_lat!.toStringAsFixed(5)}, ${_lng!.toStringAsFixed(5)} (±${_precisaoGps?.toStringAsFixed(0) ?? 0}m)',
+                          style: const TextStyle(fontSize: 11, color: Colors.black45),
+                        ),
+                      ],
+                      const SizedBox(height: 12),
+                      TextButton.icon(
+                        onPressed: () => _obterLocalizacao(_selectedCampo),
+                        icon: const Icon(Icons.refresh, size: 16),
+                        label: const Text('Atualizar GPS'),
+                      ),
+                    ],
+                  ),
+                )
+              else if (_locationObtained && !_dentroDoRaio)
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Colors.red.shade50,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.red.shade300),
+                  ),
+                  child: Column(
+                    children: [
+                      const Icon(Icons.wrong_location_rounded, color: Colors.red, size: 56),
+                      const SizedBox(height: 12),
+                      const Text(
+                        'Presença NÃO liberada: Fora do raio do estágio',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold, fontSize: 16),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Sua distância atual: ${_formatarDistancia(_distanciaMetros)}',
+                        style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'O raio máximo permitido para este campo é de ${_selectedCampo?.raioMetros.toInt() ?? 150} metros.',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(color: Colors.black87),
+                      ),
+                      const SizedBox(height: 8),
+                      const Text(
+                        'Para registrar presença, você deve estar fisicamente presente no campo de estágio.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: Colors.red, fontSize: 13, fontStyle: FontStyle.italic),
+                      ),
+                      if (_lat != null && _lng != null) ...[
+                        const SizedBox(height: 6),
+                        Text(
+                          'Sua coordenada: ${_lat!.toStringAsFixed(5)}, ${_lng!.toStringAsFixed(5)}',
+                          style: const TextStyle(fontSize: 11, color: Colors.black45),
+                        ),
+                      ],
+                      const SizedBox(height: 16),
+                      FilledButton.tonalIcon(
+                        onPressed: () => _obterLocalizacao(_selectedCampo),
+                        icon: const Icon(Icons.my_location),
+                        label: const Text('Atualizar Minha Localização'),
+                      ),
                     ],
                   ),
                 ),
@@ -319,37 +535,128 @@ class _RegistrarPresencaScreenState extends ConsumerState<RegistrarPresencaScree
     );
   }
 
-  Future<void> _obterLocalizacao() async {
+  Future<void> _obterLocalizacao([CampoEstagio? campoAlvo]) async {
     setState(() {
       _isGettingLocation = true;
       _locationObtained = false;
-      _gpsDisponivel = true;
+      _erroLocalizacao = null;
     });
 
-    await Future.delayed(const Duration(seconds: 1));
+    final campo = campoAlvo ?? _selectedCampo ?? _obterCampoParaValidacao(ref.read(frequenciaHojeProvider).valueOrNull);
+    if (campo == null) {
+      setState(() {
+        _isGettingLocation = false;
+        _erroLocalizacao = 'Selecione um campo de estágio para validar a localização.';
+      });
+      return;
+    }
 
-    final jornadaFreq = ref.read(frequenciaHojeProvider).valueOrNull?.frequenciaAtual;
-    final targetLat = (_selectedCampo != null && _selectedCampo!.lat != 0)
-        ? _selectedCampo!.lat
-        : (jornadaFreq?.lat ?? -3.738470);
-    final targetLng = (_selectedCampo != null && _selectedCampo!.lng != 0)
-        ? _selectedCampo!.lng
-        : (jornadaFreq?.lng ?? -38.528740);
+    try {
+      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        if (!mounted) return;
+        setState(() {
+          _isGettingLocation = false;
+          _dentroDoRaio = false;
+          _erroLocalizacao = 'O serviço de localização (GPS) está desativado. Ative a localização no seu dispositivo ou navegador para continuar.';
+        });
+        return;
+      }
 
-    if (!mounted) return;
-    setState(() {
-      _isGettingLocation = false;
-      _locationObtained = true;
-      _lat = targetLat;
-      _lng = targetLng;
-    });
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+        if (permission == LocationPermission.denied) {
+          if (!mounted) return;
+          setState(() {
+            _isGettingLocation = false;
+            _dentroDoRaio = false;
+            _erroLocalizacao = 'Permissão de GPS negada. É obrigatório autorizar a localização para validar a presença no campo de estágio.';
+          });
+          return;
+        }
+      }
+
+      if (permission == LocationPermission.deniedForever) {
+        if (!mounted) return;
+        setState(() {
+          _isGettingLocation = false;
+          _dentroDoRaio = false;
+          _erroLocalizacao = 'A permissão de GPS está bloqueada permanentemente. Por favor, libere a permissão de localização nas configurações do seu navegador ou dispositivo.';
+        });
+        return;
+      }
+
+      final position = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          timeLimit: Duration(seconds: 15),
+        ),
+      );
+
+      final dist = Geolocator.distanceBetween(
+        position.latitude,
+        position.longitude,
+        campo.lat,
+        campo.lng,
+      );
+
+      final dentro = dist <= campo.raioMetros;
+
+      if (!mounted) return;
+      setState(() {
+        _isGettingLocation = false;
+        _locationObtained = true;
+        _lat = position.latitude;
+        _lng = position.longitude;
+        _precisaoGps = position.accuracy;
+        _distanciaMetros = dist;
+        _dentroDoRaio = dentro;
+        _erroLocalizacao = null;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _isGettingLocation = false;
+        _dentroDoRaio = false;
+        _erroLocalizacao = 'Erro ao capturar GPS do dispositivo: $e';
+      });
+    }
   }
 
   void _confirmarPresenca() {
+    if (!_dentroDoRaio || _lat == null || _lng == null) {
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Row(
+            children: [
+              Icon(Icons.wrong_location_rounded, color: Colors.red),
+              SizedBox(width: 10),
+              Text('Presença Bloqueada'),
+            ],
+          ),
+          content: Text(
+            'Você está fora do raio permitido do campo de estágio (${_formatarDistancia(_distanciaMetros)} de distância).\n\n'
+            'Raio máximo permitido: ${_selectedCampo?.raioMetros.toInt() ?? 150} metros.\n\n'
+            'Para liberar a presença, você deve estar fisicamente presente no local do estágio.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Entendido'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+
     ConfirmationBottomSheet.show(
       context,
       title: 'Confirmar Check-in?',
-      message: 'Local: ${_selectedCampo?.nome}\nTurno: $_selectedTurno\nHorário: ${TimeOfDay.now().format(context)}',
+      message: 'Local: ${_selectedCampo?.nome}\nTurno: $_selectedTurno\nDistância: ${_formatarDistancia(_distanciaMetros)}\nHorário: ${TimeOfDay.now().format(context)}',
       confirmText: 'CONFIRMAR',
       onConfirm: () {
         _executarRegistroBanco();
@@ -358,6 +665,33 @@ class _RegistrarPresencaScreenState extends ConsumerState<RegistrarPresencaScree
   }
 
   void _confirmarCheckoutModal(BuildContext context, String frequenciaId, String horaEntrada, double horasTrabalhadas) {
+    if (!_dentroDoRaio || _lat == null || _lng == null) {
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Row(
+            children: [
+              Icon(Icons.wrong_location_rounded, color: Colors.red),
+              SizedBox(width: 10),
+              Text('Check-out Bloqueado'),
+            ],
+          ),
+          content: Text(
+            'Você está fora do raio permitido do campo de estágio (${_formatarDistancia(_distanciaMetros)} de distância).\n\n'
+            'Para registrar a saída, você deve estar fisicamente no local do estágio.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Entendido'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+
     final horaSaidaStr = TimeOfDay.now().format(context);
     final hCalc = horasTrabalhadas.toStringAsFixed(1);
     final messenger = ScaffoldMessenger.of(context);
@@ -366,7 +700,7 @@ class _RegistrarPresencaScreenState extends ConsumerState<RegistrarPresencaScree
     ConfirmationBottomSheet.show(
       context,
       title: 'Confirmar Registar Saída?',
-      message: 'Confirmar saída às $horaSaidaStr?\nHoras trabalhadas hoje: ${hCalc}h',
+      message: 'Confirmar saída às $horaSaidaStr?\nDistância: ${_formatarDistancia(_distanciaMetros)}\nHoras trabalhadas hoje: ${hCalc}h',
       confirmText: 'CONFIRMAR SAÍDA',
       onConfirm: () async {
         try {
@@ -374,7 +708,9 @@ class _RegistrarPresencaScreenState extends ConsumerState<RegistrarPresencaScree
             frequenciaId: frequenciaId,
             latSaida: _lat,
             lngSaida: _lng,
-            gpsSaidaDisponivel: _gpsDisponivel,
+            gpsSaidaDisponivel: true,
+            distanciaSaidaMetros: _distanciaMetros,
+            precisaoSaidaMetros: _precisaoGps,
           );
           if (mounted) {
             ref.invalidate(frequenciaHojeProvider);
@@ -448,6 +784,12 @@ class _RegistrarPresencaScreenState extends ConsumerState<RegistrarPresencaScree
       final campo = _selectedCampo;
       if (campo == null) {
         throw Exception('Selecione um campo de estágio.');
+      }
+
+      if (!_dentroDoRaio || _lat == null || _lng == null) {
+        throw Exception(
+          'Presença não liberada: Você está fora do raio permitido do campo de estágio (${_formatarDistancia(_distanciaMetros)} de distância). Raio permitido: ${campo.raioMetros.toInt()}m.',
+        );
       }
 
       String turnoTipo = 'manha';
@@ -578,8 +920,8 @@ class _RegistrarPresencaScreenState extends ConsumerState<RegistrarPresencaScree
         throw Exception('Não foi possível vincular a alocação para o campo selecionado.');
       }
 
-      final latEnvio = (campo.lat != 0) ? campo.lat : (_lat ?? -3.738470);
-      final lngEnvio = (campo.lng != 0) ? campo.lng : (_lng ?? -38.528740);
+      final latEnvio = _lat!;
+      final lngEnvio = _lng!;
       final nowIso = DateTime.now().toUtc().toIso8601String();
 
       try {
@@ -591,9 +933,11 @@ class _RegistrarPresencaScreenState extends ConsumerState<RegistrarPresencaScree
           'timestamp_servidor': nowIso,
           'timestamp_cliente': nowIso,
           'status': 'pendente_validacao',
-          'lat_registro': _gpsDisponivel ? latEnvio : null,
-          'lng_registro': _gpsDisponivel ? lngEnvio : null,
-          'gps_disponivel': _gpsDisponivel,
+          'lat_registro': latEnvio,
+          'lng_registro': lngEnvio,
+          'gps_disponivel': true,
+          'distancia_metros': _distanciaMetros,
+          'gps_precisao_metros': _precisaoGps,
           'created_by': userId,
         });
       } catch (insertErr) {
@@ -616,9 +960,11 @@ class _RegistrarPresencaScreenState extends ConsumerState<RegistrarPresencaScree
                   'timestamp_servidor': nowIso,
                   'timestamp_cliente': nowIso,
                   'status': 'pendente_validacao',
-                  'lat_registro': _gpsDisponivel ? latEnvio : null,
-                  'lng_registro': _gpsDisponivel ? lngEnvio : null,
-                  'gps_disponivel': _gpsDisponivel,
+                  'lat_registro': latEnvio,
+                  'lng_registro': lngEnvio,
+                  'gps_disponivel': true,
+                  'distancia_metros': _distanciaMetros,
+                  'gps_precisao_metros': _precisaoGps,
                   'lat_saida': null,
                   'lng_saida': null,
                   'timestamp_saida_cliente': null,
